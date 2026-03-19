@@ -437,12 +437,11 @@ def page_overview():
         jobs_html = ''
         for job in jobs:
             badge_class = 'badge-active' if job['status'] == 'Succeeded' else 'badge-warning' if job['status'] == 'Empty' else 'badge-neutral'
-            jobs_html += f"""
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="color:#f4f4f5; font-size:0.85rem; background:#27272a; padding:4px 8px; border-radius:4px;">{job['name']}</span>
-                    <span class="badge {badge_class}"><div class='badge-dot' style='background-color:{job['color']};'></div>{job['status']}</span>
-                    <span style="color:#a1a1aa; font-size:0.75rem;">{job['time']}</span>
-                </div>"""
+            jobs_html += f"""<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
+<span style="color:#f4f4f5; font-size:0.85rem; background:#27272a; padding:4px 8px; border-radius:4px;">{job['name']}</span>
+<span class="badge {badge_class}"><div class='badge-dot' style='background-color:{job['color']};'></div>{job['status']}</span>
+<span style="color:#a1a1aa; font-size:0.75rem;">{job['time']}</span>
+</div>"""
 
         if not jobs_html:
             jobs_html = '<div style="color:#a1a1aa; text-align:center; padding:20px;">No pipeline stages detected yet. Run the pipeline to see status here.</div>'

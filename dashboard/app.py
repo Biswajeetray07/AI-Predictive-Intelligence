@@ -40,6 +40,9 @@ from dashboard.utils import (
     list_available_tickers,
     get_recent_logs,
     get_project_root,
+    get_disk_usage_summary,
+    get_training_history,
+    get_pipeline_run_history,
 )
 
 # Real-time API Configuration
@@ -274,159 +277,182 @@ def render_section_header(title: str, subtitle: str = ""):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def page_overview():
+    # ── Load Real Data ──
+    kpis = get_overview_kpis()
+    stats = get_system_stats()
+    disk = get_disk_usage_summary()
+    jobs = get_pipeline_run_history()
+    models = get_model_info()
+    stages = get_pipeline_stages()
+
+    completed = sum(1 for s in stages if s['status'] == 'Complete')
+    not_started = sum(1 for s in stages if s['status'] == 'Not Started')
+    empty = sum(1 for s in stages if s['status'] == 'Empty')
+
     # ── Header Row ──
     header_col1, header_col2 = st.columns([3, 1])
     with header_col1:
         st.markdown('<div style="font-size: 1.8rem; font-weight: 600; margin-bottom: 24px;">Dashboard</div>', unsafe_allow_html=True)
     with header_col2:
-        st.markdown('<div style="text-align: right; color: #a1a1aa; font-size: 0.9rem; margin-top: 10px;">Last week ⌄ &nbsp;&nbsp;&nbsp; 🟢 Credits: 5000</div>', unsafe_allow_html=True)
+        api_count = kpis.get('active_apis', 0)
+        st.markdown(f'<div style="text-align: right; color: #a1a1aa; font-size: 0.9rem; margin-top: 10px;">🟢 APIs Active: {api_count} &nbsp;&nbsp; 📊 Records: {kpis.get("total_records", 0):,}</div>', unsafe_allow_html=True)
 
     # ── ROW 1 (3 Cards) ──
     r1c1, r1c2, r1c3 = st.columns(3)
-    
-    def draw_mini_bar(color, title=""):
-        y_vals = np.random.randint(10, 100, size=7)
-        x_vals = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-        fig = go.Figure(go.Bar(x=x_vals, y=y_vals, marker_color=color, width=0.4))
+
+    # Mini bar chart helper using real breakdowns
+    def draw_mini_bar(labels, values, color):
+        fig = go.Figure(go.Bar(x=labels, y=values, marker_color=color, width=0.4))
         fig.update_layout(**PLOTLY_TEMPLATE['layout'])
         fig.update_layout(height=140, margin=dict(l=0,r=0,t=10,b=10),
             xaxis=dict(showgrid=False, zeroline=False, color='#a1a1aa'),
             yaxis=dict(showgrid=False, showticklabels=False, zeroline=False)
         )
         return fig
-        
+
     with r1c1:
-        st.markdown("""
+        st.markdown(f"""
         <div class="bento-card">
-            <div class="card-title">⛙ Flows</div>
-            <div class="card-subtitle">(+26% weekly activity) compared to previous week</div>
+            <div class="card-title">📡 Data Sources</div>
+            <div class="card-subtitle">Live data from pipeline collection layer</div>
             <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <div><span style="font-size:0.8rem;color:#a1a1aa;">Experiments</span><br/><span style="font-size:1.5rem;font-weight:600;">234</span></div>
-                <div><span style="font-size:0.8rem;color:#a1a1aa;">Models</span><br/><span style="font-size:1.5rem;font-weight:600;">34</span></div>
+                <div><span style="font-size:0.8rem;color:#a1a1aa;">Sources</span><br/><span style="font-size:1.5rem;font-weight:600;">{kpis.get('data_sources', 0)}</span></div>
+                <div><span style="font-size:0.8rem;color:#a1a1aa;">Features</span><br/><span style="font-size:1.5rem;font-weight:600;">{kpis.get('features_generated', 0)}</span></div>
             </div>
         """, unsafe_allow_html=True)
-        st.plotly_chart(draw_mini_bar('#a7f3d0'), use_container_width=True, config={'displayModeBar':False})
+        # Mini chart from disk breakdown
+        bd = disk['breakdown']
+        st.plotly_chart(draw_mini_bar(list(bd.keys()), list(bd.values()), '#a7f3d0'), use_container_width=True, config={{'displayModeBar':False}})
         st.markdown('</div>', unsafe_allow_html=True)
 
     with r1c2:
-        st.markdown("""
+        st.markdown(f"""
         <div class="bento-card">
-            <div class="card-title">🚀 Deploy</div>
-            <div class="card-subtitle">(+32% weekly activity) compared to previous week</div>
+            <div class="card-title">🤖 Models</div>
+            <div class="card-subtitle">Trained model artifacts and checkpoints</div>
             <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <div><span style="font-size:0.8rem;color:#a1a1aa;">Models Deployed</span><br/><span style="font-size:1.5rem;font-weight:600;">256</span></div>
-                <div><span style="font-size:0.8rem;color:#a1a1aa;">Key Metrics</span><br/><span style="font-size:1.5rem;font-weight:600;">592</span></div>
+                <div><span style="font-size:0.8rem;color:#a1a1aa;">Saved Models</span><br/><span style="font-size:1.5rem;font-weight:600;">{kpis.get('models_saved', 0)}</span></div>
+                <div><span style="font-size:0.8rem;color:#a1a1aa;">Total Size</span><br/><span style="font-size:1.5rem;font-weight:600;">{disk['breakdown'].get('Models', 0)} MB</span></div>
             </div>
         """, unsafe_allow_html=True)
-        st.plotly_chart(draw_mini_bar('#a7f3d0'), use_container_width=True, config={'displayModeBar':False})
+        if models:
+            names = [m['name'][:8] for m in models[:6]]
+            sizes = [m['size_mb'] for m in models[:6]]
+            st.plotly_chart(draw_mini_bar(names, sizes, '#3b82f6'), use_container_width=True, config={{'displayModeBar':False}})
+        else:
+            st.caption('No models trained yet')
         st.markdown('</div>', unsafe_allow_html=True)
 
     with r1c3:
-        st.markdown("""
+        st.markdown(f"""
         <div class="bento-card">
-            <div class="card-title">⚙️ Jobs</div>
-            <div class="card-subtitle">(+32% weekly activity) compared to previous week</div>
+            <div class="card-title">⚙️ Pipeline Stages</div>
+            <div class="card-subtitle">Real-time pipeline execution status</div>
             <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <div><span style="font-size:0.8rem;color:#f59e0b;">■ Running</span><br/><span style="font-size:1.5rem;font-weight:600;">329</span></div>
-                <div><span style="font-size:0.8rem;color:#10b981;">■ Succeeded</span><br/><span style="font-size:1.5rem;font-weight:600;">532</span></div>
-                <div><span style="font-size:0.8rem;color:#ef4444;">■ Failed</span><br/><span style="font-size:1.5rem;font-weight:600;">9</span></div>
+                <div><span style="font-size:0.8rem;color:#10b981;">■ Complete</span><br/><span style="font-size:1.5rem;font-weight:600;">{completed}</span></div>
+                <div><span style="font-size:0.8rem;color:#f59e0b;">■ Empty</span><br/><span style="font-size:1.5rem;font-weight:600;">{empty}</span></div>
+                <div><span style="font-size:0.8rem;color:#a1a1aa;">■ Pending</span><br/><span style="font-size:1.5rem;font-weight:600;">{not_started}</span></div>
             </div>
         """, unsafe_allow_html=True)
-        fig_spike = go.Figure()
-        y1 = np.random.randint(5, 50, size=15)
-        y2 = np.random.randint(1, 10, size=15)
-        x_vals = [f"D{i}" for i in range(15)]
-        fig_spike.add_trace(go.Bar(x=x_vals, y=y1, marker_color='#a7f3d0', width=0.3))
-        fig_spike.add_trace(go.Bar(x=x_vals, y=y2, marker_color='#ef4444', width=0.3))
-        fig_spike.update_layout(**PLOTLY_TEMPLATE['layout'])
-        fig_spike.update_layout(height=140, margin=dict(l=0,r=0,t=10,b=10),
-            barmode='stack', showlegend=False, xaxis=dict(showgrid=False, showticklabels=False),
+        stage_names = [s['name'][:5] for s in stages]
+        stage_files = [s['files'] for s in stages]
+        fig_stages = go.Figure(go.Bar(x=stage_names, y=stage_files, marker_color=['#10b981' if s['status']=='Complete' else '#f59e0b' if s['status']=='Empty' else '#27272a' for s in stages], width=0.4))
+        fig_stages.update_layout(**PLOTLY_TEMPLATE['layout'])
+        fig_stages.update_layout(height=140, margin=dict(l=0,r=0,t=10,b=10),
+            barmode='stack', showlegend=False, xaxis=dict(showgrid=False, showticklabels=True, tickfont=dict(size=9)),
             yaxis=dict(showgrid=False, showticklabels=False))
-        st.plotly_chart(fig_spike, use_container_width=True, config={'displayModeBar':False})
+        st.plotly_chart(fig_stages, use_container_width=True, config={'displayModeBar':False})
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ── ROWS 2 & 3 (Vertical Panel Layout) ──
     left_block, right_panel = st.columns([2, 1])
 
     with left_block:
-        # Row 2
+        # Row 2 — System Resources (LIVE)
         r2c1, r2c2 = st.columns(2)
-        
-        def render_resource_card():
-            st.markdown("""
-            <div class="bento-card">
-                <div class="card-title">🗄 Resource Presets</div>
-                <div class="card-subtitle">(+28% weekly activity) compared to previous week</div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                    <div><span style="font-weight:600;font-size:1.1rem;">60%</span> <span style="font-size:0.7rem;color:#a1a1aa;">CPU</span></div>
-                    <div><span style="font-weight:600;font-size:1.1rem;">60%</span> <span style="font-size:0.7rem;color:#a1a1aa;">GPU RAM</span></div>
-                    <div><span style="font-weight:600;font-size:1.1rem;">12GB</span> <span style="font-size:0.7rem;color:#a1a1aa;">RAM</span></div>
-                </div>
-            """, unsafe_allow_html=True)
-            y_area = np.random.randint(20, 80, size=20)
-            fig_area = go.Figure(go.Scatter(y=y_area, fill='tozeroy', mode='none', fillcolor='rgba(167, 243, 208, 0.5)'))
-            fig_area.add_trace(go.Bar(y=y_area*0.8, marker_color='#a7f3d0', width=0.8))
-            fig_area.update_layout(**PLOTLY_TEMPLATE['layout'])
-            fig_area.update_layout(height=100, margin=dict(l=0,r=0,t=0,b=0),
-                xaxis=dict(showgrid=False, zeroline=False, visible=False), 
-                yaxis=dict(showgrid=False, zeroline=False, visible=False),
-                showlegend=False)
-            st.plotly_chart(fig_area, use_container_width=True, config={'displayModeBar':False})
-            st.markdown('</div>', unsafe_allow_html=True)
 
         with r2c1:
-            render_resource_card()
-        with r2c2:
-            render_resource_card()
+            cpu_color = '#ef4444' if stats['cpu_percent'] > 80 else '#f59e0b' if stats['cpu_percent'] > 50 else '#10b981'
+            st.markdown(f"""
+            <div class="bento-card">
+                <div class="card-title">🖥 CPU & Memory</div>
+                <div class="card-subtitle">Live system resource utilization</div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                    <div><span style="font-weight:600;font-size:1.1rem;color:{cpu_color};">{stats['cpu_percent']}%</span> <span style="font-size:0.7rem;color:#a1a1aa;">CPU</span></div>
+                    <div><span style="font-weight:600;font-size:1.1rem;">{stats['memory_percent']}%</span> <span style="font-size:0.7rem;color:#a1a1aa;">RAM</span></div>
+                    <div><span style="font-weight:600;font-size:1.1rem;">{stats['memory_used_gb']}GB</span> <span style="font-size:0.7rem;color:#a1a1aa;">Used</span></div>
+                </div>
+            """, unsafe_allow_html=True)
+            # CPU gauge mini chart
+            fig_cpu = go.Figure(go.Indicator(mode="gauge+number", value=stats['cpu_percent'],
+                number=dict(suffix="%", font=dict(color=cpu_color, size=20)),
+                gauge=dict(axis=dict(range=[0,100], visible=False), bar=dict(color=cpu_color),
+                    bgcolor='#18181b', borderwidth=0)))
+            fig_cpu.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                height=100, margin=dict(l=20,r=20,t=10,b=10))
+            st.plotly_chart(fig_cpu, use_container_width=True, config={'displayModeBar':False})
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        # Row 3
+        with r2c2:
+            st.markdown(f"""
+            <div class="bento-card">
+                <div class="card-title">💾 Disk Usage</div>
+                <div class="card-subtitle">Storage footprint of pipeline data</div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                    <div><span style="font-weight:600;font-size:1.1rem;">{stats['disk_percent']}%</span> <span style="font-size:0.7rem;color:#a1a1aa;">Disk</span></div>
+                    <div><span style="font-weight:600;font-size:1.1rem;">{stats['disk_used_gb']}GB</span> <span style="font-size:0.7rem;color:#a1a1aa;">Used</span></div>
+                    <div><span style="font-weight:600;font-size:1.1rem;">{stats['disk_total_gb']}GB</span> <span style="font-size:0.7rem;color:#a1a1aa;">Total</span></div>
+                </div>
+            """, unsafe_allow_html=True)
+            fig_disk = go.Figure(go.Indicator(mode="gauge+number", value=stats['disk_percent'],
+                number=dict(suffix="%", font=dict(color='#3b82f6', size=20)),
+                gauge=dict(axis=dict(range=[0,100], visible=False), bar=dict(color='#3b82f6'),
+                    bgcolor='#18181b', borderwidth=0)))
+            fig_disk.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                height=100, margin=dict(l=20,r=20,t=10,b=10))
+            st.plotly_chart(fig_disk, use_container_width=True, config={'displayModeBar':False})
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Row 3 — Files & Records
         r3c1, r3c2 = st.columns(2)
         with r3c1:
-            st.markdown("""
+            total_records = kpis.get('total_records', 0)
+            st.markdown(f"""
             <div class="bento-card" style="height: 140px;">
-                <div class="card-title">📄 Files</div>
-                <div class="card-subtitle" style="margin-top:20px;">128 GB (+26% weekly activity) compared to previous week</div>
+                <div class="card-title">📄 Project Data</div>
+                <div class="card-subtitle" style="margin-top:20px;">{disk['total_gb']} GB across {sum(1 for v in disk['breakdown'].values() if v > 0)} directories · {total_records:,} total records</div>
             </div>
             """, unsafe_allow_html=True)
         with r3c2:
-            st.markdown("""
+            api_count = kpis.get('active_apis', 0)
+            st.markdown(f"""
             <div class="bento-card" style="height: 140px;">
-                <div class="card-title">💳 Billing</div>
-                <div class="card-subtitle" style="margin-top:20px;">(+32% weekly activity) compared to previous week</div>
+                <div class="card-title">🔑 API Integration</div>
+                <div class="card-subtitle" style="margin-top:20px;">{api_count} API keys configured · {kpis.get('data_sources', 0)} data sources active</div>
             </div>
             """, unsafe_allow_html=True)
 
     with right_panel:
-        st.markdown("""
+        # Build jobs HTML dynamically from real pipeline data
+        jobs_html = ''
+        for job in jobs:
+            badge_class = 'badge-active' if job['status'] == 'Succeeded' else 'badge-warning' if job['status'] == 'Empty' else 'badge-neutral'
+            jobs_html += f"""
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="color:#f4f4f5; font-size:0.85rem; background:#27272a; padding:4px 8px; border-radius:4px;">{job['name']}</span>
+                    <span class="badge {badge_class}"><div class='badge-dot' style='background-color:{job['color']};'></div>{job['status']}</span>
+                    <span style="color:#a1a1aa; font-size:0.75rem;">{job['time']}</span>
+                </div>"""
+
+        if not jobs_html:
+            jobs_html = '<div style="color:#a1a1aa; text-align:center; padding:20px;">No pipeline stages detected yet. Run the pipeline to see status here.</div>'
+
+        st.markdown(f"""
         <div class="bento-card" style="height: 100%;">
-            <div class="card-title">⏱ Latest Running Jobs</div>
-            <div class="card-subtitle">(+32% weekly activity) compared to previous week</div>
+            <div class="card-title">⏱ Pipeline Status</div>
+            <div class="card-subtitle">{completed}/{len(stages)} stages complete · {sum(s['files'] for s in stages)} total files</div>
             <div style="display:flex; flex-direction:column; gap:16px; margin-top:20px;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="color:#f4f4f5; font-size:0.85rem; background:#27272a; padding:4px 8px; border-radius:4px;">ip-172-25-0-189</span>
-                    <span class="badge badge-active"><div class='badge-dot' style='background-color:#10b981;'></div>Succeeded</span>
-                    <span style="color:#a1a1aa; font-size:0.75rem;">2 hour ago</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="color:#f4f4f5; font-size:0.85rem; background:#27272a; padding:4px 8px; border-radius:4px;">ip-172-25-0-189</span>
-                    <span class="badge badge-error"><div class='badge-dot' style='background-color:#ef4444;'></div>Failed</span>
-                    <span style="color:#a1a1aa; font-size:0.75rem;">2 hour ago</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="color:#f4f4f5; font-size:0.85rem; background:#27272a; padding:4px 8px; border-radius:4px;">ip-172-25-0-189</span>
-                    <span class="badge badge-active"><div class='badge-dot' style='background-color:#10b981;'></div>Succeeded</span>
-                    <span style="color:#a1a1aa; font-size:0.75rem;">2 hour ago</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="color:#f4f4f5; font-size:0.85rem; background:#27272a; padding:4px 8px; border-radius:4px;">ip-172-25-0-189</span>
-                    <span class="badge badge-warning"><div class='badge-dot' style='background-color:#f59e0b;'></div>Started</span>
-                    <span style="color:#a1a1aa; font-size:0.75rem;">2 hour ago</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="color:#f4f4f5; font-size:0.85rem; background:#27272a; padding:4px 8px; border-radius:4px;">ip-172-25-0-189</span>
-                    <span class="badge badge-active"><div class='badge-dot' style='background-color:#10b981;'></div>Succeeded</span>
-                    <span style="color:#a1a1aa; font-size:0.75rem;">2 hour ago</span>
-                </div>
+                {jobs_html}
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -704,21 +730,29 @@ def page_model_evaluation():
     
     st.markdown('<div style="height: 1px; background: #27272a; margin: 32px 0;"></div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="card-title" style="margin-bottom: 16px;">Training History (Sample)</div>', unsafe_allow_html=True)
-    epochs = list(range(1, 11))
-    np.random.seed(42)
-    loss_nlp = [2.5 * np.exp(-0.3 * e) + 0.3 + np.random.uniform(-0.05, 0.05) for e in epochs]
-    loss_ts = [1.8 * np.exp(-0.25 * e) + 0.2 + np.random.uniform(-0.03, 0.03) for e in epochs]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=epochs, y=loss_nlp, name='NLP Multi-Task',
-                             line=dict(color='#3b82f6', width=2), mode='lines+markers', marker=dict(size=6)))
-    fig.add_trace(go.Scatter(x=epochs, y=loss_ts, name='TimeSeries',
-                             line=dict(color='#10b981', width=2), mode='lines+markers', marker=dict(size=6)))
-    fig.update_layout(**PLOTLY_TEMPLATE['layout'])
-    fig.update_layout( height=400,
-                      xaxis_title="Epoch", yaxis_title="Loss")
-    st.plotly_chart(fig, use_container_width=True)
+    # ── Real Training History ──
+    history = get_training_history()
+    if history:
+        st.markdown('<div class="card-title" style="margin-bottom: 16px;">Training History (Real)</div>', unsafe_allow_html=True)
+        model_colors = {'lstm': '#3b82f6', 'gru': '#10b981', 'transformer': '#f59e0b', 'tft': '#a855f7', 'nlp': '#ef4444', 'fusion': '#06b6d4'}
+        fig = go.Figure()
+        for model_name, entries in history.items():
+            color = model_colors.get(model_name, '#f4f4f5')
+            epochs = [e['epoch'] for e in entries]
+            if any('train_loss' in e for e in entries):
+                train_vals = [e.get('train_loss', None) for e in entries]
+                fig.add_trace(go.Scatter(x=epochs, y=train_vals, name=f'{model_name} (train)',
+                    line=dict(color=color, width=2), mode='lines+markers', marker=dict(size=5)))
+            if any('val_loss' in e for e in entries):
+                val_vals = [e.get('val_loss', None) for e in entries]
+                fig.add_trace(go.Scatter(x=epochs, y=val_vals, name=f'{model_name} (val)',
+                    line=dict(color=color, width=2, dash='dash'), mode='lines+markers', marker=dict(size=5)))
+        fig.update_layout(**PLOTLY_TEMPLATE['layout'])
+        fig.update_layout(height=400, xaxis_title="Epoch", yaxis_title="Loss")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.markdown('<div class="card-title" style="margin-bottom: 16px;">Training History</div>', unsafe_allow_html=True)
+        st.info('No training history available yet. Run Phase 6 (Model Training) to populate this chart.')
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: PREDICTIONS
 # ═══════════════════════════════════════════════════════════════════════════════

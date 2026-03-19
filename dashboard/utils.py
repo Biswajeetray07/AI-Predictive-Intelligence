@@ -332,3 +332,140 @@ def get_recent_logs(n=50):
         except Exception:
             pass
     return lines[-n:] if lines else ['No log files found.']
+
+
+# ─── Disk Usage Summary ──────────────────────────────────────────────────────
+
+def get_disk_usage_summary():
+    """Get real disk usage for project data directories."""
+    dirs = {
+        'Raw Data': os.path.join(PROJECT_ROOT, 'data', 'raw'),
+        'Processed': os.path.join(PROJECT_ROOT, 'data', 'processed'),
+        'Features': os.path.join(PROJECT_ROOT, 'data', 'features'),
+        'Models': os.path.join(PROJECT_ROOT, 'saved_models'),
+    }
+    total_bytes = 0
+    breakdown = {}
+    for label, path in dirs.items():
+        size = 0
+        if os.path.exists(path):
+            for dirpath, _, filenames in os.walk(path):
+                for f in filenames:
+                    fp = os.path.join(dirpath, f)
+                    try:
+                        size += os.path.getsize(fp)
+                    except OSError:
+                        pass
+        breakdown[label] = size
+        total_bytes += size
+    return {
+        'total_gb': round(total_bytes / (1024**3), 2),
+        'total_mb': round(total_bytes / (1024**2), 1),
+        'breakdown': {k: round(v / (1024**2), 1) for k, v in breakdown.items()},
+    }
+
+
+# ─── Training History ─────────────────────────────────────────────────────────
+
+def get_training_history():
+    """Extract real epoch/loss data from training log files."""
+    import re
+    history = {}  # model_name -> [(epoch, train_loss, val_loss)]
+
+    # Search for log files that contain training output
+    log_files = glob.glob(os.path.join(PROJECT_ROOT, '**', '*.log'), recursive=True)
+
+    # Also check if there's a data_collection.log or similar with training output
+    pattern = re.compile(
+        r'\[(\w+)\]\s+Epoch\s+(\d+)/\d+\s+\|\s+Train:\s+([\d.]+)\s+\|\s+Val:\s+([\d.]+)'
+    )
+
+    for lf in log_files:
+        try:
+            with open(lf, 'r') as f:
+                for line in f:
+                    match = pattern.search(line)
+                    if match:
+                        model = match.group(1)
+                        epoch = int(match.group(2))
+                        train_loss = float(match.group(3))
+                        val_loss = float(match.group(4))
+                        if model not in history:
+                            history[model] = []
+                        history[model].append({
+                            'epoch': epoch,
+                            'train_loss': train_loss,
+                            'val_loss': val_loss,
+                        })
+        except Exception:
+            pass
+
+    # Also try reading from stdout capture or mlflow
+    try:
+        import sqlite3
+        db_path = os.path.join(PROJECT_ROOT, 'mlflow.db')
+        if os.path.exists(db_path) and os.path.getsize(db_path) > 0:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT key, value, step FROM metrics 
+                WHERE key LIKE '%_train_loss' OR key LIKE '%_val_loss'
+                ORDER BY step
+            """)
+            rows = cursor.fetchall()
+            conn.close()
+
+            mlflow_data = {}
+            for key, value, step in rows:
+                parts = key.rsplit('_', 2)  # e.g. lstm_train_loss -> lstm, train, loss
+                if len(parts) >= 3:
+                    model = parts[0]
+                    metric_type = parts[1]  # train or val
+                    if model not in mlflow_data:
+                        mlflow_data[model] = {}
+                    if step not in mlflow_data[model]:
+                        mlflow_data[model][step] = {}
+                    mlflow_data[model][step][metric_type] = value
+
+            for model, steps in mlflow_data.items():
+                if model not in history:
+                    history[model] = []
+                for step in sorted(steps.keys()):
+                    entry = {'epoch': step}
+                    if 'train' in steps[step]:
+                        entry['train_loss'] = steps[step]['train']
+                    if 'val' in steps[step]:
+                        entry['val_loss'] = steps[step]['val']
+                    if 'train_loss' in entry or 'val_loss' in entry:
+                        history[model].append(entry)
+    except Exception:
+        pass
+
+    return history
+
+
+# ─── Pipeline Run History ─────────────────────────────────────────────────────
+
+def get_pipeline_run_history():
+    """Get pipeline stage statuses for the overview 'Latest Jobs' panel."""
+    stages = get_pipeline_stages()
+    jobs = []
+    for s in stages:
+        if s['status'] == 'Complete':
+            badge = 'Succeeded'
+            color = '#10b981'
+        elif s['status'] == 'Empty':
+            badge = 'Empty'
+            color = '#f59e0b'
+        else:
+            badge = 'Not Started'
+            color = '#a1a1aa'
+
+        jobs.append({
+            'name': s['name'],
+            'status': badge,
+            'color': color,
+            'time': s['last_modified'],
+            'files': s['files'],
+        })
+    return jobs

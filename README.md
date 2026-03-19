@@ -12,6 +12,10 @@
 </p>
 
 <p align="center">
+  <img src="docs/assets/dashboard.png" width="900" alt="AI Predictive Intelligence Dashboard" />
+</p>
+
+<p align="center">
   Built with PyTorch · DeBERTa · LSTM/GRU/Transformer/TFT · Optuna HPO · Streamlit Dashboard
 </p>
 

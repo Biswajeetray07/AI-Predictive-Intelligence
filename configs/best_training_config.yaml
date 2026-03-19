@@ -1,0 +1,65 @@
+# ─── AI Predictive Intelligence Training Configuration ───────────────────────
+# Central configuration for all model training pipelines.
+
+nlp_model:
+  model_name: "microsoft/deberta-v3-base"
+  max_length: 256
+  batch_size: 16
+  epochs: 5
+  learning_rate: 2.0e-5
+  weight_decay: 0.01        # Added for regularization
+  freeze_layers: 6          # Freeze bottom N encoder layers
+  max_train_samples: 5000   # Production training size
+  device: "mps"              # Apple Silicon M4 GPU
+  dropout: 0.1              # Configurable dropout for NLP head
+
+  # Task loss weights
+  loss_weights:
+    sentiment: 1.0
+    events: 0.8
+    topics: 0.5
+    entities: 0.3
+
+  # Source embedding
+  source_embedding_dim: 16
+  day_embedding_dim: 8
+  month_embedding_dim: 8
+
+timeseries_model:
+  sequence_length: 60
+  batch_size: 64
+  epochs: 50
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4      # Added for regularization
+  hidden_dim: 128
+  num_layers: 2
+  dropout: 0.2              # Tunable dropout (0.1 - 0.5 recommended)
+  patience: 10              # Early stopping patience
+
+  models:
+    - lstm
+    - gru
+    - transformer
+    - tft
+
+  ensemble:
+    method: "weighted_average"
+    weights: [0.25, 0.20, 0.30, 0.25]  # lstm, gru, transformer, tft
+
+fusion_model:
+  batch_size: 32
+  epochs: 50
+  learning_rate: 5.0e-4
+  weight_decay: 1.0e-4       # Added for regularization
+  nlp_embedding_dim: 768
+  attention_heads: 4         # Multi-head attention for NLP embeddings
+  mlp_hidden: [512, 256, 128]
+  dropout: 0.3               # Tunable dropout
+  patience: 8
+
+paths:
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  features: "data/features"
+  model_inputs: "data/processed/model_inputs"
+  saved_models: "saved_models"

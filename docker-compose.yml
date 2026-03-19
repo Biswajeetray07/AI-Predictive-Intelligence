@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  # ========================================================================
+  # Main API Service
+  # ========================================================================
+  api:
+    build: .
+    container_name: ai-predictive-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./saved_models:/app/saved_models
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    command: uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - API_KEY=${API_KEY:-predictive_intel_dev_key_2026}
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-H", "X-API-Key: predictive_intel_dev_key_2026", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - predictive-net
+    depends_on:
+      - prometheus
+
+  # ========================================================================
+  # Prometheus (Metrics Storage)
+  # ========================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ai-predictive-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    restart: unless-stopped
+    networks:
+      - predictive-net
+
+  # ========================================================================
+  # Grafana (Metrics Visualization)
+  # ========================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ai-predictive-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    restart: unless-stopped
+    networks:
+      - predictive-net
+    depends_on:
+      - prometheus
+
+  # ========================================================================
+  # Dashboard Service
+  # ========================================================================
+  dashboard:
+    build: .
+    container_name: ai-predictive-dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./saved_models:/app/saved_models
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - API_KEY=${API_KEY:-predictive_intel_dev_key_2026}
+    restart: unless-stopped
+    networks:
+      - predictive-net
+    depends_on:
+      - api
+
+  # ========================================================================
+  # MLflow (Experiment Tracking)
+  # ========================================================================
+  mlflow:
+    image: python:3.10-slim
+    container_name: ai-predictive-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlflow_data:/mlflow_data
+      - ./.env:/app/.env:ro
+    working_dir: /app
+    command: |
+      sh -c "pip install -q mlflow && 
+             mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri file:///mlflow_data"
+    restart: unless-stopped
+    networks:
+      - predictive-net
+
+# ========================================================================
+# Networks
+# ========================================================================
+networks:
+  predictive-net:
+    driver: bridge
+
+# ========================================================================
+# Volumes
+# ========================================================================
+volumes:
+  prometheus_data:
+  grafana_data:

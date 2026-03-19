@@ -1,0 +1,14 @@
+{
+    "venvPath": ".",
+    "venv": "myenv",
+    "pythonVersion": "3.10",
+    "pythonPlatform": "Windows",
+    "executionEnvironments": [
+        {
+            "root": ".",
+            "extraPaths": ["."]
+        }
+    ],
+    "include": ["src"],
+    "exclude": ["**/myenv", "**/.git", "**/data", "**/__pycache__"]
+}

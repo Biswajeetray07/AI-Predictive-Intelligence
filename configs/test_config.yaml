@@ -1,0 +1,22 @@
+# ─── Verification Training Configuration ───────────────────────
+timeseries_model:
+  sequence_length: 60
+  batch_size: 256
+  epochs: 1
+  learning_rate: 1.0e-3
+  hidden_dim: 16
+  num_layers: 1
+  dropout: 0.1
+  patience: 1
+  models:
+    - lstm
+  ensemble:
+    method: "weighted_average"
+    weights: [1.0]
+
+paths:
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  features: "data/features"
+  model_inputs: "data/processed/model_inputs"
+  saved_models: "saved_models_test"

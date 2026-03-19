@@ -205,3 +205,29 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Project-specific Data & Models
+/data/
+/saved_models/
+/mlruns/
+*.db
+/.kaggle/
+
+# Local Dev
+/.streamlit/
+/.vscode/
+.pyre_configuration
+
+# Agentic Logs & Temporary Walkthroughs
+DASHBOARD_*.md
+PIPELINE_*.md
+PROJECT_*.md
+ERROR_*.md
+FIXES_*.md
+WEEK1_WEEK2_*.md
+NEXT_STEPS.md
+QUICK_START.md
+REAL_DATA_GUIDE.md
+README_FIXES.txt
+walkthrough.md
+verification_report.json

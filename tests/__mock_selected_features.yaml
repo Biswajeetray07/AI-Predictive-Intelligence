@@ -1,0 +1,5 @@
+selected_features:
+- feature_good
+target_column: close
+total_original: 4
+total_selected: 1

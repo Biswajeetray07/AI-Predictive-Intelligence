@@ -1,0 +1,39 @@
+best_params:
+  fusion:
+    attention_heads: 8
+    batch_size: 32
+    dropout: 0.48756641168055725
+    hidden_dim_L1: 512
+    l1_lambda: 2.463768595899744e-05
+    learning_rate: 0.0007568292060167617
+    mlp_layers: 1
+    weight_decay: 0.0037958531426706445
+  gru:
+    dropout: 0.13485016730091967
+    hidden_dim: 64
+    l1_lambda: 6.796578090758147e-05
+    learning_rate: 0.0009842315738502602
+    num_layers: 1
+    weight_decay: 0.00025378155082656634
+  lstm:
+    dropout: 0.13485016730091967
+    hidden_dim: 64
+    l1_lambda: 6.796578090758147e-05
+    learning_rate: 0.0009842315738502602
+    num_layers: 1
+    weight_decay: 0.00025378155082656634
+  tft:
+    dropout: 0.13485016730091967
+    hidden_dim: 64
+    l1_lambda: 6.796578090758147e-05
+    learning_rate: 0.0009842315738502602
+    num_layers: 1
+    weight_decay: 0.00025378155082656634
+  transformer:
+    dropout: 0.13485016730091967
+    hidden_dim: 64
+    l1_lambda: 6.796578090758147e-05
+    learning_rate: 0.0009842315738502602
+    num_layers: 1
+    weight_decay: 0.00025378155082656634
+timestamp: '2026-03-19T22:02:15.566215'

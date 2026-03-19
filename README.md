@@ -468,5 +468,5 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 ---
 
 <p align="center">
-  <b>Built with ❤️ by <a href="https://github.com/Biswajeetray07">Biswajeet Ray</a></b>
+  <b>Built by <a href="https://github.com/Biswajeetray07">Biswajeet Ray</a></b>
 </p>

@@ -322,7 +322,7 @@ def page_overview():
         """, unsafe_allow_html=True)
         # Mini chart from disk breakdown
         bd = disk['breakdown']
-        st.plotly_chart(draw_mini_bar(list(bd.keys()), list(bd.values()), '#a7f3d0'), use_container_width=True, config={{'displayModeBar':False}})
+        st.plotly_chart(draw_mini_bar(list(bd.keys()), list(bd.values()), '#a7f3d0'), use_container_width=True, config={'displayModeBar':False})
         st.markdown('</div>', unsafe_allow_html=True)
 
     with r1c2:
@@ -338,7 +338,7 @@ def page_overview():
         if models:
             names = [m['name'][:8] for m in models[:6]]
             sizes = [m['size_mb'] for m in models[:6]]
-            st.plotly_chart(draw_mini_bar(names, sizes, '#3b82f6'), use_container_width=True, config={{'displayModeBar':False}})
+            st.plotly_chart(draw_mini_bar(names, sizes, '#3b82f6'), use_container_width=True, config={'displayModeBar':False})
         else:
             st.caption('No models trained yet')
         st.markdown('</div>', unsafe_allow_html=True)

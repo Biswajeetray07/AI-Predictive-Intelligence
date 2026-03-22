@@ -11,6 +11,11 @@ Pipeline:
 
 import os
 import sys
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import yaml
 import torch
 import torch.nn as nn
@@ -36,11 +41,10 @@ except ImportError:
     def end_run(*args, **kwargs):
         pass
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-
 from src.models.fusion.multi_horizon_fusion import MultiHorizonFusionModel
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
+logging.getLogger().setLevel(logging.INFO)
 
 
 def load_config():
@@ -192,23 +196,13 @@ def load_fusion_data(project_root):
         nlp_embeddings[b_idx, s_idx, :] = nlp_2d[n_idx]
                     
     else:
-        logging.warning("⚠️ WARNING: Required embeddings/metadata not found in data pipeline.")
-        logging.warning("Generating synthetic embeddings for structural pipeline testing.")
-        logging.warning("To use real data: ensure NLP training completes and generates embeddings.")
-        
-        batch_size = 100
-        seq_len = 60
-        nlp_dim = 768
-        ts_dim = 128
-        
-        # Generate synthetic but realistic embeddings
-        nlp_embeddings = np.random.randn(batch_size, seq_len, nlp_dim).astype(np.float32)
-        ts_features = np.random.randn(batch_size, ts_dim).astype(np.float32)
-        targets = np.random.randn(batch_size, 3).astype(np.float32)
+        logging.error("❌ CRITICAL: Required embeddings/metadata not found in data pipeline.")
+        logging.error("Cannot train Fusion model without REAL NLP and TimeSeries embeddings.")
+        logging.error("Check Phase 6 (NLP and TS training) to ensure they completed successfully.")
+        raise FileNotFoundError("Missing real embeddings or metadata for Fusion training. Mock fallback disabled.")
 
     logging.info(f"Fusion data: NLP={nlp_embeddings.shape}, TS={ts_features.shape}, Targets={targets.shape}")
     return nlp_embeddings, ts_features, targets
-
 
 def train_fusion():
     set_seed(42)

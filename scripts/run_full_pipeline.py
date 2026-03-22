@@ -350,9 +350,10 @@ def phase_6_full_training(device, best_params=None, run_fusion_hpo=False, n_tria
             logger.info("Cleaned up leaked MLflow run from NLP training.")
         except Exception:
             pass
-        logger.info("Generating mock NLP embeddings as fallback...")
-        from scripts.generate_mock_nlp import main as generate_mock
-        generate_mock()
+        # logger.info("Generating mock NLP embeddings as fallback...")
+        # from scripts.generate_mock_nlp import main as generate_mock
+        # generate_mock()
+        raise e # Fail fast to ensure real data is used
     
     # ── 6B.5: Fusion HPO (NOW with real embeddings!) ──
     if run_fusion_hpo:

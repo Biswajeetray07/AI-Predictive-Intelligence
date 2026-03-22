@@ -1,5 +1,10 @@
 import os
 import sys
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import pandas as pd
 import numpy as np
 import torch
@@ -15,11 +20,10 @@ from sklearn.preprocessing import StandardScaler
 from dotenv import load_dotenv
 load_dotenv()
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-
 from src.models.fusion.multi_horizon_fusion import MultiHorizonFusionModel
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
+logging.getLogger().setLevel(logging.INFO)
 
 class BacktestEngine:
     def __init__(self, device: str = 'cpu', model_path: Optional[str] = None, dataset_path: Optional[str] = None, metadata_path: Optional[str] = None, config_path: Optional[str] = None):
@@ -38,7 +42,10 @@ class BacktestEngine:
         else:
             self.config = {}
 
-        self.model = self._load_model()
+        self.embeddings = self._load_embeddings()
+        ts_dim = self.embeddings['ts'].shape[1] if 'ts' in self.embeddings else 64
+        self.model = self._load_model(ts_dim=ts_dim)
+        
         self.df = pd.read_csv(self.dataset_path)
         self.df['date'] = pd.to_datetime(self.df['date'])
         self.df.sort_values(['ticker', 'date'], inplace=True)
@@ -49,18 +56,21 @@ class BacktestEngine:
             self.logger.warning("No tickers found in dataset.")
             
         self.scaler = self._load_scaler()
-        self.embeddings = self._load_embeddings()
 
     def run(self) -> Dict:
         """Standard high-level entry point used by run_full_pipeline."""
-        # Use a recent slice for backtesting if not specified
-        res_df = self.run_backtest(start_date="2025-01-01", end_date="2025-12-31")
+        if self.embeddings and 'meta' in self.embeddings:
+            min_dt = self.embeddings['meta']['date'].min().strftime('%Y-%m-%d')
+            max_dt = self.embeddings['meta']['date'].max().strftime('%Y-%m-%d')
+        else:
+            min_dt, max_dt = "2025-01-01", "2025-12-31"
+            
+        res_df = self.run_backtest(start_date=min_dt, end_date=max_dt)
         return self.compute_metrics(res_df)
 
-    def _load_model(self) -> nn.Module:
+    def _load_model(self, ts_dim: int) -> nn.Module:
         """Loads the fusion model weights."""
         nlp_dim = 768
-        ts_dim = 128
         
         model = MultiHorizonFusionModel(nlp_dim=nlp_dim, ts_dim=ts_dim)
         if os.path.exists(self.model_path):
@@ -103,7 +113,9 @@ class BacktestEngine:
             embs['meta']['date'] = pd.to_datetime(embs['meta']['date'])
             self.logger.info("Loaded embeddings and temporal metadata.")
         else:
-            self.logger.warning("Embeddings or metadata missing. Backtest will use zeroes/mock data.")
+            self.logger.error("❌ CRITICAL: Embeddings or metadata missing.")
+            self.logger.error("Backtest requires REAL embeddings from Phase 6. Cannot proceed.")
+            raise FileNotFoundError("Missing real embeddings for Backtesting. Mock fallback disabled.")
         return embs
 
     def run_backtest(self, start_date: str, end_date: str, tickers: Optional[List[str]] = None) -> pd.DataFrame:
@@ -217,6 +229,10 @@ class BacktestEngine:
 
     def compute_metrics(self, results_df: pd.DataFrame) -> Dict:
         """Enhanced performance metrics with RMSE, directional accuracy, and R²."""
+        if results_df.empty or 'actual_1d' not in results_df.columns:
+            self.logger.warning("No valid predictions generated in this date range. (DataFrame is empty)")
+            return {}
+            
         metrics = {}
         for h in ['1d', '5d', '30d']:
             valid = results_df.dropna(subset=[f'actual_{h}'])
@@ -283,8 +299,13 @@ if __name__ == "__main__":
         metadata_path="data/processed/model_inputs/metadata_test.csv"
     )
     
-    # Run a small slice
-    res = engine.run_backtest(start_date="2025-07-01", end_date="2025-07-10")
+    if engine.embeddings and 'meta' in engine.embeddings:
+        min_dt = engine.embeddings['meta']['date'].min().strftime('%Y-%m-%d')
+        max_dt = engine.embeddings['meta']['date'].max().strftime('%Y-%m-%d')
+    else:
+        min_dt, max_dt = "2025-07-01", "2025-07-10"
+        
+    res = engine.run_backtest(start_date=min_dt, end_date=max_dt)
     print(res.head())
     metrics = engine.compute_metrics(res)
     print(metrics)

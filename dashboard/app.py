@@ -711,21 +711,41 @@ def page_model_evaluation():
         st.info("No models available for evaluation yet.")
         return
 
-    st.markdown('<div class="card-title" style="margin-bottom: 16px;">Model Performance Metrics</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="bento-card">
-        <p style="color: #a1a1aa; font-size: 0.9rem;">Detailed metrics will populate once models finish training and
-        backtesting produces evaluation results. Metrics tracked:</p>
-        <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px;">
-            <span class="badge badge-neutral">MSE</span>
-            <span class="badge badge-neutral">RMSE</span>
-            <span class="badge badge-neutral">MAE</span>
-            <span class="badge badge-neutral">R²</span>
-            <span class="badge badge-neutral">Directional Accuracy</span>
-            <span class="badge badge-neutral">Sharpe Ratio</span>
+    metrics_path = os.path.join(PROJECT_ROOT, "saved_models", "backtest_metrics.json")
+    if os.path.exists(metrics_path):
+        with open(metrics_path, "r") as f:
+            metrics_data = json.load(f)
+            
+        st.markdown('<div class="card-title" style="margin-bottom: 16px;">Real Backtest Performance Metrics</div>', unsafe_allow_html=True)
+        if not metrics_data:
+            st.warning("Backtest ran but no predictions were generated (Empty dataset).")
+        else:
+            cols = st.columns(len(metrics_data))
+            for i, (k, v) in enumerate(metrics_data.items()):
+                with cols[i]:
+                    val_str = f"{v:.4f}" if isinstance(v, float) else str(v)
+                    st.markdown(f'''
+                    <div class="bento-card" style="text-align: center; padding: 10px;">
+                        <span style="color: #a1a1aa; font-size: 0.7rem; text-transform: uppercase;">{k.replace('_', ' ')}</span><br>
+                        <span style="font-size: 1.3rem; font-weight: 700; font-family: 'Geist Mono'; color: #3b82f6;">{val_str}</span>
+                    </div>
+                    ''', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="card-title" style="margin-bottom: 16px;">Model Performance Metrics</div>', unsafe_allow_html=True)
+        st.markdown("""
+        <div class="bento-card">
+            <p style="color: #a1a1aa; font-size: 0.9rem;">Detailed metrics will populate once models finish training and
+            backtesting produces evaluation results. Metrics tracked:</p>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px;">
+                <span class="badge badge-neutral">MSE</span>
+                <span class="badge badge-neutral">RMSE</span>
+                <span class="badge badge-neutral">MAE</span>
+                <span class="badge badge-neutral">R²</span>
+                <span class="badge badge-neutral">Directional Accuracy</span>
+                <span class="badge badge-neutral">Sharpe Ratio</span>
+            </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
     
     st.markdown('<div style="height: 1px; background: #27272a; margin: 32px 0;"></div>', unsafe_allow_html=True)
 

@@ -309,3 +309,9 @@ if __name__ == "__main__":
     print(res.head())
     metrics = engine.compute_metrics(res)
     print(metrics)
+    
+    import json
+    import os
+    os.makedirs("saved_models", exist_ok=True)
+    with open("saved_models/backtest_metrics.json", "w") as f:
+        json.dump(metrics, f, indent=4)

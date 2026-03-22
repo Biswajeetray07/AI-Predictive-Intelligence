@@ -376,27 +376,36 @@ def get_training_history():
     log_files = glob.glob(os.path.join(PROJECT_ROOT, '**', '*.log'), recursive=True)
 
     # Also check if there's a data_collection.log or similar with training output
-    pattern = re.compile(
-        r'\[(\w+)\]\s+Epoch\s+(\d+)/\d+\s+\|\s+Train:\s+([\d.]+)\s+\|\s+Val:\s+([\d.]+)'
-    )
+    pattern1 = re.compile(r'\[(\w+)\]\s+Epoch\s+(\d+)/\d+\s+\|\s+Train:\s+([\d.]+)\s+\|\s+Val:\s+([\d.]+)')
+    pattern2 = re.compile(r'Epoch\s+(\d+)\s+—\s+Train Loss:\s+([\d.]+)\s+\|\s+Val Loss:\s+([\d.]+)')
 
     for lf in log_files:
         try:
             with open(lf, 'r') as f:
                 for line in f:
-                    match = pattern.search(line)
-                    if match:
-                        model = match.group(1)
-                        epoch = int(match.group(2))
-                        train_loss = float(match.group(3))
-                        val_loss = float(match.group(4))
-                        if model not in history:
-                            history[model] = []
-                        history[model].append({
-                            'epoch': epoch,
-                            'train_loss': train_loss,
-                            'val_loss': val_loss,
-                        })
+                    match1 = pattern1.search(line)
+                    match2 = pattern2.search(line)
+                    
+                    if match1:
+                        model = match1.group(1)
+                        epoch = int(match1.group(2))
+                        train_loss = float(match1.group(3))
+                        val_loss = float(match1.group(4))
+                    elif match2:
+                        model = 'Fusion Model'
+                        epoch = int(match2.group(1))
+                        train_loss = float(match2.group(2))
+                        val_loss = float(match2.group(3))
+                    else:
+                        continue
+                        
+                    if model not in history:
+                        history[model] = []
+                    history[model].append({
+                        'epoch': epoch,
+                        'train_loss': train_loss,
+                        'val_loss': val_loss,
+                    })
         except Exception:
             pass
 

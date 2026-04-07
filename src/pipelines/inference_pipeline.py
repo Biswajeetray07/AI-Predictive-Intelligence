@@ -83,65 +83,130 @@ class Predictor:
             
         return scalers
 
+    def _infer_dims_from_checkpoint(self, state_dict, model_type):
+        """Infer hidden_dim, num_layers, and input_dim from checkpoint weights."""
+        if model_type in ('lstm', 'gru'):
+            rnn_key = f'{model_type}.weight_ih_l0'
+            if rnn_key in state_dict:
+                w = state_dict[rnn_key]
+                gate_mult = 4 if model_type == 'lstm' else 3
+                hidden = w.shape[0] // gate_mult
+                input_dim = w.shape[1]
+                # Count layers
+                layers = 0
+                while f'{model_type}.weight_ih_l{layers}' in state_dict:
+                    layers += 1
+                return input_dim, hidden, max(layers, 1)
+        elif model_type == 'transformer':
+            if 'input_projection.weight' in state_dict:
+                w = state_dict['input_projection.weight']
+                d_model = w.shape[0]
+                input_dim = w.shape[1]
+                layers = 0
+                while f'encoder.layers.{layers}.self_attn.in_proj_weight' in state_dict:
+                    layers += 1
+                return input_dim, d_model, max(layers, 1)
+        elif model_type == 'tft':
+            if 'var_selection.grn.fc1.weight' in state_dict:
+                w = state_dict['var_selection.grn.fc1.weight']
+                hidden = w.shape[0]
+                input_dim = w.shape[1]
+                layers = 0
+                while f'attention.layers.{layers}.self_attn.in_proj_weight' in state_dict:
+                    layers += 1
+                return input_dim, hidden, max(layers, 1)
+        return None, None, None
+
     def _load_all_models(self):
         model_dir = os.path.join(PROJECT_ROOT, 'saved_models')
         ts_config = self.config.get('timeseries_model', {})
         
-        # 1. Load Time Series Ensemble
-        # We need input_dim. We'll try to infer it from existing metadata or use a placeholder then resize if needed,
-        # but better to get it from the scaler or a sample.
-        # For now, let's assume we can get it from the feature scaler if available.
-        input_dim = 128 # Default fallback
+        # Fallback dims from config
+        default_input = 128
         if 'feature' in self.scalers:
-            input_dim = self.scalers['feature'].n_features_in_
+            default_input = self.scalers['feature'].n_features_in_
+        default_hidden = ts_config.get('hidden_dim', 128)
+        default_layers = ts_config.get('num_layers', 2)
             
         ts_model_names = ts_config.get('models', ['lstm', 'gru', 'transformer', 'tft'])
-        hidden = ts_config.get('hidden_dim', 128)
-        layers = ts_config.get('num_layers', 2)
         
         for name in ts_model_names:
             path = os.path.join(model_dir, f'{name}_model.pt')
             if os.path.exists(path):
-                model = None
-                if name == 'lstm':
-                    model = LSTMForecaster(input_dim, hidden, layers)
-                elif name == 'gru':
-                    model = GRUForecaster(input_dim, hidden, layers)
-                elif name == 'transformer':
-                    model = TransformerForecaster(input_dim, d_model=hidden, nhead=4, num_layers=layers, dropout=0.0)
-                elif name == 'tft':
-                    model = TFTForecaster(input_dim, hidden, num_heads=4, num_layers=layers, dropout=0.0)
-                if model is not None:
-                    model.load_state_dict(torch.load(path, map_location=self.device, weights_only=True))
-                    model.to(self.device).eval()
-                    self.ts_models[name] = model
-                    logging.info(f"Loaded TS model: {name}")
-                else:
-                    logging.warning(f"Model type '{name}' not recognized. Skipping.")
+                try:
+                    state = torch.load(path, map_location=self.device, weights_only=True)
+                    # Infer actual architecture from saved weights
+                    inp, hid, lyr = self._infer_dims_from_checkpoint(state, name)
+                    input_dim = inp or default_input
+                    hidden = hid or default_hidden
+                    layers = lyr or default_layers
+                    
+                    model = None
+                    if name == 'lstm':
+                        model = LSTMForecaster(input_dim, hidden, layers)
+                    elif name == 'gru':
+                        model = GRUForecaster(input_dim, hidden, layers)
+                    elif name == 'transformer':
+                        model = TransformerForecaster(input_dim, d_model=hidden, nhead=4, num_layers=layers, dropout=0.0)
+                    elif name == 'tft':
+                        model = TFTForecaster(input_dim, hidden, num_heads=4, num_layers=layers, dropout=0.0)
+                    if model is not None:
+                        model.load_state_dict(state)
+                        model.to(self.device).eval()
+                        self.ts_models[name] = model
+                        logging.info(f"Loaded TS model: {name} (input={input_dim}, hidden={hidden}, layers={layers})")
+                    else:
+                        logging.warning(f"Model type '{name}' not recognized. Skipping.")
+                except Exception as e:
+                    logging.error(f"Failed to load {name} model: {e}")
+
+        # Store ts_dim from loaded models for later use
+        self.ts_dim = 64  # will be updated from actual loaded model
+        if self.ts_models:
+            first_model = next(iter(self.ts_models.values()))
+            # Get context dim from a dummy forward pass or checkpoint
+            for name, model in self.ts_models.items():
+                if name in ('lstm', 'gru'):
+                    self.ts_dim = model.lstm.hidden_size if name == 'lstm' else model.gru.hidden_size
+                    break
 
         # 2. Load NLP Model
         nlp_path = os.path.join(model_dir, 'nlp_multitask_model.pt')
         if os.path.exists(nlp_path):
-            self.nlp_model = MultiTaskNLPModel(freeze_encoder_layers=0)
-            self.nlp_model.load_state_dict(torch.load(nlp_path, map_location=self.device, weights_only=True))
-            self.nlp_model.to(self.device).eval()
-            self.nlp_tokenizer = NLPTokenizer(max_length=self.config.get('nlp_model', {}).get('max_length', 256))
-            logging.info("Loaded NLP multi-task model")
+            try:
+                self.nlp_model = MultiTaskNLPModel(freeze_encoder_layers=0)
+                self.nlp_model.load_state_dict(torch.load(nlp_path, map_location=self.device, weights_only=True))
+                self.nlp_model.to(self.device).eval()
+                self.nlp_tokenizer = NLPTokenizer(max_length=self.config.get('nlp_model', {}).get('max_length', 256))
+                logging.info("Loaded NLP multi-task model")
+            except Exception as e:
+                logging.warning(f"Could not load NLP model (TS-only mode): {e}")
+                self.nlp_model = None
 
-        # 3. Load Fusion Model
+        # 3. Load Fusion Model — infer ts_dim from checkpoint
         fusion_path = os.path.join(model_dir, 'fusion_model.pt')
         fusion_config = self.config.get('fusion_model', {})
         if os.path.exists(fusion_path):
-            self.fusion_model = MultiHorizonFusionModel(
-                nlp_dim=768,
-                ts_dim=128,
-                attention_heads=fusion_config.get('attention_heads', 4),
-                mlp_hidden=fusion_config.get('mlp_hidden', [512, 256, 128]),
-                dropout=0.0
-            )
-            self.fusion_model.load_state_dict(torch.load(fusion_path, map_location=self.device, weights_only=True))
-            self.fusion_model.to(self.device).eval()
-            logging.info("Loaded Deep Fusion model")
+            try:
+                fusion_state = torch.load(fusion_path, map_location=self.device, weights_only=True)
+                # Infer ts_dim from the gmu.ts_proj.weight shape
+                ts_dim_actual = self.ts_dim
+                if 'gmu.ts_proj.weight' in fusion_state:
+                    ts_dim_actual = fusion_state['gmu.ts_proj.weight'].shape[1]
+                    self.ts_dim = ts_dim_actual
+                self.fusion_model = MultiHorizonFusionModel(
+                    nlp_dim=768,
+                    ts_dim=ts_dim_actual,
+                    attention_heads=fusion_config.get('attention_heads', 4),
+                    mlp_hidden=fusion_config.get('mlp_hidden', [512, 256, 128]),
+                    dropout=0.0
+                )
+                self.fusion_model.load_state_dict(fusion_state)
+                self.fusion_model.to(self.device).eval()
+                logging.info(f"Loaded Deep Fusion model (ts_dim={ts_dim_actual})")
+            except Exception as e:
+                logging.error(f"Failed to load fusion model: {e}")
+                self.fusion_model = None
 
     @torch.no_grad()
     def predict(self, ts_sequence: np.ndarray, nlp_texts: Optional[List[str]] = None) -> Dict:
@@ -182,7 +247,8 @@ class Predictor:
             ts_embeddings.append(context.cpu().numpy() * model_weight)
             
         # Weighted average embedding for fusion
-        fused_ts_emb = np.sum(ts_embeddings, axis=0) if ts_embeddings else np.zeros((1, 128))
+        ts_dim = getattr(self, 'ts_dim', 64)
+        fused_ts_emb = np.sum(ts_embeddings, axis=0) if ts_embeddings else np.zeros((1, ts_dim))
         fused_ts_emb_torch = torch.tensor(fused_ts_emb, dtype=torch.float32).to(self.device)
 
         # 2. Process NLP — BATCHED INFERENCE (Phase 5 optimization)

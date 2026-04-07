@@ -1,6 +1,8 @@
 """
 Data loading utilities for the AI Predictive Intelligence Dashboard.
 Reads directly from the project's data directories (no API server needed).
+Loads ALL real collected data: stocks (parquet), regime states, social signals,
+macro data, crypto, NLP signals, alternative data indices, and model inference.
 """
 
 import os
@@ -10,6 +12,9 @@ import datetime
 import pandas as pd
 import numpy as np
 import psutil
+import logging
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -21,13 +26,18 @@ def get_project_root():
 # ─── Overview KPIs ────────────────────────────────────────────────────────────
 
 def count_total_records():
-    """Count total rows across all raw CSVs."""
+    """Count total rows across all raw data files (CSV + Parquet)."""
     total = 0
-    for csv_file in glob.glob(os.path.join(PROJECT_ROOT, 'data', 'raw', '**', '*.csv'), recursive=True):
+    raw_dir = os.path.join(PROJECT_ROOT, 'data', 'raw')
+    for csv_file in glob.glob(os.path.join(raw_dir, '**', '*.csv'), recursive=True):
         try:
-            # Fast row count without loading data
             with open(csv_file, 'r') as f:
-                total += sum(1 for _ in f) - 1  # minus header
+                total += sum(1 for _ in f) - 1
+        except Exception:
+            pass
+    for pq_file in glob.glob(os.path.join(raw_dir, '**', '*.parquet'), recursive=True):
+        try:
+            total += len(pd.read_parquet(pq_file))
         except Exception:
             pass
     return total
@@ -79,11 +89,14 @@ def _count_data_sources():
     raw_dir = os.path.join(PROJECT_ROOT, 'data', 'raw')
     if not os.path.exists(raw_dir):
         return 0
-    sources = set()
+    count = 0
     for d in os.listdir(raw_dir):
-        if os.path.isdir(os.path.join(raw_dir, d)):
-            sources.add(d)
-    return len(sources)
+        dp = os.path.join(raw_dir, d)
+        if os.path.isdir(dp):
+            # Count subdirectories as separate sources
+            subs = [s for s in os.listdir(dp) if os.path.isdir(os.path.join(dp, s))]
+            count += max(1, len(subs))
+    return count
 
 
 # ─── Data Sources ─────────────────────────────────────────────────────────────
@@ -100,37 +113,59 @@ def get_data_sources_info():
         if not os.path.isdir(domain_path):
             continue
 
-        files = glob.glob(os.path.join(domain_path, '**', '*.*'), recursive=True)
-        data_files = [f for f in files if f.endswith(('.csv', '.parquet', '.json'))]
-        total_size = sum(os.path.getsize(f) for f in data_files if os.path.exists(f))
-        total_records = 0
-        latest_modified = None
+        # Check for subdirectories (e.g., financial/stocks, financial/crypto)
+        subdirs = [s for s in os.listdir(domain_path) if os.path.isdir(os.path.join(domain_path, s))]
 
-        for f in data_files:
-            try:
-                mtime = datetime.datetime.fromtimestamp(os.path.getmtime(f))
-                if latest_modified is None or mtime > latest_modified:
-                    latest_modified = mtime
-            except Exception:
-                pass
-            if f.endswith('.csv'):
-                try:
-                    with open(f, 'r') as fh:
-                        total_records += sum(1 for _ in fh) - 1
-                except Exception:
-                    pass
-
-        sources.append({
-            'name': domain.replace('_', ' ').title(),
-            'directory': domain,
-            'files': len(data_files),
-            'records': total_records,
-            'size_mb': round(total_size / (1024 * 1024), 2),
-            'last_updated': latest_modified.strftime('%Y-%m-%d %H:%M') if latest_modified else 'N/A',
-            'status': 'Online' if data_files else 'No Data',
-        })
+        if subdirs:
+            for sub in subdirs:
+                sub_path = os.path.join(domain_path, sub)
+                info = _scan_data_directory(sub_path, f"{domain.replace('_', ' ').title()} / {sub.replace('_', ' ').title()}")
+                if info:
+                    sources.append(info)
+        else:
+            info = _scan_data_directory(domain_path, domain.replace('_', ' ').title())
+            if info:
+                sources.append(info)
 
     return sources
+
+
+def _scan_data_directory(path, name):
+    """Scan a single data directory for file stats."""
+    files = glob.glob(os.path.join(path, '**', '*.*'), recursive=True)
+    data_files = [f for f in files if f.endswith(('.csv', '.parquet', '.json'))]
+    if not data_files:
+        return None
+
+    total_size = sum(os.path.getsize(f) for f in data_files if os.path.exists(f))
+    total_records = 0
+    latest_modified = None
+
+    for f in data_files:
+        try:
+            mtime = datetime.datetime.fromtimestamp(os.path.getmtime(f))
+            if latest_modified is None or mtime > latest_modified:
+                latest_modified = mtime
+        except Exception:
+            pass
+        try:
+            if f.endswith('.csv'):
+                with open(f, 'r') as fh:
+                    total_records += sum(1 for _ in fh) - 1
+            elif f.endswith('.parquet'):
+                total_records += len(pd.read_parquet(f))
+        except Exception:
+            pass
+
+    return {
+        'name': name,
+        'directory': os.path.basename(path),
+        'files': len(data_files),
+        'records': total_records,
+        'size_mb': round(total_size / (1024 * 1024), 2),
+        'last_updated': latest_modified.strftime('%Y-%m-%d %H:%M') if latest_modified else 'N/A',
+        'status': 'Active' if data_files else 'No Data',
+    }
 
 
 # ─── Datasets ─────────────────────────────────────────────────────────────────
@@ -142,6 +177,7 @@ def get_datasets_info():
     if not os.path.exists(processed_dir):
         return datasets
 
+    # CSV files
     for f in glob.glob(os.path.join(processed_dir, '**', '*.csv'), recursive=True):
         try:
             df = pd.read_csv(f, nrows=0)
@@ -157,8 +193,10 @@ def get_datasets_info():
         except Exception:
             pass
 
-    # Also add parquet files
+    # Parquet files (skip large model input files)
     for f in glob.glob(os.path.join(processed_dir, '**', '*.parquet'), recursive=True):
+        if os.path.getsize(f) > 500 * 1024 * 1024:  # Skip >500MB files
+            continue
         try:
             df = pd.read_parquet(f)
             datasets.append({
@@ -188,6 +226,20 @@ def get_datasets_info():
                 })
             except Exception:
                 pass
+        for f in glob.glob(os.path.join(feat_dir, '*.csv')):
+            try:
+                df_h = pd.read_csv(f, nrows=0)
+                rows = sum(1 for _ in open(f)) - 1
+                datasets.append({
+                    'name': os.path.basename(f),
+                    'path': f,
+                    'records': rows,
+                    'features': len(df_h.columns),
+                    'columns': list(df_h.columns),
+                    'size_mb': round(os.path.getsize(f) / (1024 * 1024), 2),
+                })
+            except Exception:
+                pass
 
     return datasets
 
@@ -195,30 +247,35 @@ def get_datasets_info():
 # ─── Models ───────────────────────────────────────────────────────────────────
 
 def get_model_info():
-    """Discover saved model artifacts."""
+    """Discover saved model artifacts with proper classification."""
     model_dir = os.path.join(PROJECT_ROOT, 'saved_models')
     models = []
     if not os.path.exists(model_dir):
         return models
 
+    # Classification map
+    model_types = {
+        'lstm': ('Time Series', 'LSTM (Long Short-Term Memory)'),
+        'gru': ('Time Series', 'GRU (Gated Recurrent Unit)'),
+        'transformer': ('Time Series', 'Transformer Encoder'),
+        'tft': ('Time Series', 'Temporal Fusion Transformer'),
+        'nlp_multitask_model_best': ('NLP Multi-Task', 'DeBERTa-v3-base + Multi-Head'),
+        'nlp_multitask_model': ('NLP Multi-Task', 'DeBERTa-v3-base + Multi-Head'),
+        'fusion': ('Fusion', 'Cross-Attention Multi-Horizon Fusion'),
+    }
+
     for f in glob.glob(os.path.join(model_dir, '**', '*.pt'), recursive=True):
-        name = os.path.basename(f).replace('.pt', '')
+        name = os.path.basename(f).replace('_model.pt', '').replace('.pt', '')
         mtime = datetime.datetime.fromtimestamp(os.path.getmtime(f))
         size_mb = round(os.path.getsize(f) / (1024 * 1024), 2)
 
-        # Determine model type
-        if 'nlp' in name.lower():
-            model_type = 'NLP Multi-Task'
-            algorithm = 'DeBERTa-v3 + Multi-Head'
-        elif 'timeseries' in name.lower() or 'ts' in name.lower():
-            model_type = 'Time Series'
-            algorithm = 'Transformer'
-        elif 'fusion' in name.lower():
-            model_type = 'Fusion'
-            algorithm = 'Cross-Attention Fusion'
-        else:
-            model_type = 'Unknown'
-            algorithm = 'N/A'
+        model_type = 'Unknown'
+        algorithm = 'N/A'
+        for key, (mt, alg) in model_types.items():
+            if key in name.lower():
+                model_type = mt
+                algorithm = alg
+                break
 
         models.append({
             'name': name,
@@ -227,6 +284,19 @@ def get_model_info():
             'size_mb': size_mb,
             'trained_at': mtime.strftime('%Y-%m-%d %H:%M'),
             'path': f,
+        })
+
+    # Also include the regime model (pkl)
+    regime_path = os.path.join(model_dir, 'regime_model.pkl')
+    if os.path.exists(regime_path):
+        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(regime_path))
+        models.append({
+            'name': 'regime_hmm',
+            'type': 'Regime Detection',
+            'algorithm': 'Hidden Markov Model (5 states)',
+            'size_mb': round(os.path.getsize(regime_path) / (1024 * 1024), 3),
+            'trained_at': mtime.strftime('%Y-%m-%d %H:%M'),
+            'path': regime_path,
         })
 
     return models
@@ -295,28 +365,307 @@ def get_pipeline_stages():
     return stages
 
 
-# ─── Stock/Financial Data ─────────────────────────────────────────────────────
+# ─── Stock/Financial Data (FIXED: reads Parquet) ─────────────────────────────
 
 def load_stock_data(ticker='AAPL'):
-    """Load processed stock data for a given ticker."""
-    path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'financial', 'stocks', f'{ticker}.csv')
-    if os.path.exists(path):
-        df = pd.read_csv(path)
+    """Load processed stock data for a given ticker from Parquet files."""
+    # Primary: processed parquet with technical indicators
+    parquet_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'financial', 'stocks', f'{ticker}.parquet')
+    if os.path.exists(parquet_path):
+        df = pd.read_parquet(parquet_path)
+        # Normalize column name
+        if 'date' in df.columns and 'Date' not in df.columns:
+            df = df.rename(columns={'date': 'Date'})
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'])
-        elif 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.rename(columns={'date': 'Date'})
         return df
+
+    # Fallback: raw CSV
+    csv_path = os.path.join(PROJECT_ROOT, 'data', 'raw', 'financial', 'stocks', f'{ticker}.csv')
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+        if 'date' in df.columns:
+            df = df.rename(columns={'date': 'Date'})
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+        return df
+
     return None
 
 
 def list_available_tickers():
-    """List all available stock tickers."""
+    """List all available stock tickers (from parquet first, then CSV)."""
+    # Processed parquet directory
     stocks_dir = os.path.join(PROJECT_ROOT, 'data', 'processed', 'financial', 'stocks')
-    if not os.path.exists(stocks_dir):
+    if os.path.exists(stocks_dir):
+        tickers = sorted([f.replace('.parquet', '') for f in os.listdir(stocks_dir) if f.endswith('.parquet')])
+        if tickers:
+            return tickers
+
+    # Fallback to raw CSVs
+    raw_dir = os.path.join(PROJECT_ROOT, 'data', 'raw', 'financial', 'stocks')
+    if os.path.exists(raw_dir):
+        return sorted([f.replace('.csv', '') for f in os.listdir(raw_dir) if f.endswith('.csv')])
+
+    return []
+
+
+# ─── Regime States (Real HMM data) ───────────────────────────────────────────
+
+def load_regime_states():
+    """Load real HMM regime states from features/regime_states.csv."""
+    regime_path = os.path.join(PROJECT_ROOT, 'data', 'features', 'regime_states.csv')
+    if not os.path.exists(regime_path):
+        return None
+    df = pd.read_csv(regime_path)
+    df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
+REGIME_LABELS = {
+    0: ('🟢 Bull Market', '#10b981'),
+    1: ('🔴 Bear Market', '#ef4444'),
+    2: ('🟡 Sideways', '#f59e0b'),
+    3: ('🟠 High Volatility', '#f97316'),
+    4: ('🔵 Trending', '#3b82f6'),
+}
+
+
+def get_regime_label(regime_id):
+    """Get human-readable label and color for a regime ID."""
+    return REGIME_LABELS.get(regime_id, ('Unknown', '#a1a1aa'))
+
+
+# ─── Social Media Signals ────────────────────────────────────────────────────
+
+def load_social_signals():
+    """Load aggregated social media signals."""
+    path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'social_media', 'social_signals.csv')
+    if not os.path.exists(path):
+        return None
+    df = pd.read_csv(path)
+    df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
+# ─── Macro / Economic Signals ────────────────────────────────────────────────
+
+def load_macro_signals():
+    """Load macro/FRED economic signals."""
+    path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'economy', 'macro_signals.csv')
+    if not os.path.exists(path):
+        return None
+    df = pd.read_csv(path)
+    df['date'] = pd.to_datetime(df['date'])
+    # Clean column names
+    df.columns = [c.replace('macro_fred_collector_2026-03-20', 'fred_value') if 'fred' in c.lower() else c for c in df.columns]
+    return df
+
+
+# ─── Crypto Data ─────────────────────────────────────────────────────────────
+
+def load_crypto_data():
+    """Load all crypto price data."""
+    crypto_dir = os.path.join(PROJECT_ROOT, 'data', 'raw', 'financial', 'crypto')
+    if not os.path.exists(crypto_dir):
+        return None
+    frames = []
+    for f in sorted(os.listdir(crypto_dir)):
+        if f.endswith('.csv'):
+            try:
+                df = pd.read_csv(os.path.join(crypto_dir, f))
+                frames.append(df)
+            except Exception:
+                pass
+    if not frames:
+        return None
+    result = pd.concat(frames, ignore_index=True)
+    if 'date' in result.columns:
+        result['date'] = pd.to_datetime(result['date'])
+    if 'timestamp' in result.columns:
+        result['timestamp'] = pd.to_datetime(result['timestamp'])
+    return result
+
+
+def list_crypto_coins():
+    """List available crypto coins."""
+    crypto_dir = os.path.join(PROJECT_ROOT, 'data', 'raw', 'financial', 'crypto')
+    if not os.path.exists(crypto_dir):
         return []
-    return sorted([f.replace('.csv', '') for f in os.listdir(stocks_dir) if f.endswith('.csv')])
+    return sorted([f.replace('.csv', '').replace('-', ' ').title() for f in os.listdir(crypto_dir) if f.endswith('.csv')])
+
+
+# ─── NLP Signals ─────────────────────────────────────────────────────────────
+
+def load_nlp_signals():
+    """Load NLP signals (sentiment, events, topics)."""
+    path = os.path.join(PROJECT_ROOT, 'data', 'features', 'nlp_signals.parquet')
+    if not os.path.exists(path):
+        return None
+    df = pd.read_parquet(path)
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
+def load_nlp_label_quality():
+    """Load NLP label quality report — parses string-encoded dicts."""
+    import ast
+    path = os.path.join(PROJECT_ROOT, 'saved_models', 'nlp_label_quality.json')
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r') as f:
+        raw = json.load(f)
+    # Values may be string-encoded Python dicts — parse them
+    parsed = {}
+    for task, val in raw.items():
+        if isinstance(val, str):
+            try:
+                parsed[task] = ast.literal_eval(val)
+            except (ValueError, SyntaxError):
+                parsed[task] = val
+        else:
+            parsed[task] = val
+    return parsed
+
+
+# ─── Alternative Data Indices ────────────────────────────────────────────────
+
+def load_alternative_data_index(name):
+    """Load an alternative data index parquet file."""
+    path = os.path.join(PROJECT_ROOT, 'data', 'features', f'{name}.parquet')
+    if not os.path.exists(path):
+        return None
+    df = pd.read_parquet(path)
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
+def get_alternative_data_summary():
+    """Get summary of all alternative data indices."""
+    indices = [
+        ('blockchain_activity_index', 'Blockchain Activity', '⛓️'),
+        ('air_traffic_index', 'Air Traffic', '✈️'),
+        ('job_market_index', 'Job Market', '💼'),
+        ('patent_innovation_index', 'Patent Innovation', '💡'),
+        ('population_index', 'Population', '👥'),
+        ('research_activity_index', 'Research Activity', '🔬'),
+        ('trade_growth_rate', 'Global Trade', '🌍'),
+    ]
+    summaries = []
+    for file_name, label, icon in indices:
+        df = load_alternative_data_index(file_name)
+        if df is not None:
+            summaries.append({
+                'name': label,
+                'icon': icon,
+                'file': file_name,
+                'records': len(df),
+                'columns': list(df.columns),
+                'date_range': f"{df['date'].min().strftime('%Y-%m-%d')} → {df['date'].max().strftime('%Y-%m-%d')}" if 'date' in df.columns else 'N/A',
+            })
+    return summaries
+
+
+# ─── Technical Indicators ────────────────────────────────────────────────────
+
+def load_technical_indicators(ticker=None):
+    """Load technical indicators from features."""
+    path = os.path.join(PROJECT_ROOT, 'data', 'features', 'technical_indicators.parquet')
+    if not os.path.exists(path):
+        return None
+    if ticker:
+        try:
+            df = pd.read_parquet(path, filters=[('ticker', '==', ticker)])
+        except Exception:
+            df = pd.read_parquet(path)
+            df = df[df['ticker'] == ticker]
+    else:
+        df = pd.read_parquet(path)
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
+# ─── Model Inference (Real Predictions) ──────────────────────────────────────
+
+_predictor_cache = None
+
+
+def get_predictor():
+    """Get or create cached Predictor instance."""
+    global _predictor_cache
+    if _predictor_cache is not None:
+        return _predictor_cache
+
+    try:
+        import sys
+        if PROJECT_ROOT not in sys.path:
+            sys.path.insert(0, PROJECT_ROOT)
+        from src.pipelines.inference_pipeline import Predictor
+        _predictor_cache = Predictor(device='cpu')  # Use CPU for dashboard (safe)
+        return _predictor_cache
+    except Exception as e:
+        logger.warning(f"Could not load Predictor: {e}")
+        return None
+
+
+def load_test_metadata():
+    """Load metadata_test.csv for available test predictions."""
+    path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'model_inputs', 'metadata_test.csv')
+    if not os.path.exists(path):
+        return None
+    df = pd.read_csv(path)
+    df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
+def run_prediction_for_ticker(ticker, n_samples=5):
+    """
+    Run real model inference for a ticker using test data.
+    Returns list of prediction dicts.
+    """
+    meta_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'model_inputs', 'metadata_test.csv')
+    x_test_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'model_inputs', 'X_test.npy')
+
+    if not os.path.exists(meta_path) or not os.path.exists(x_test_path):
+        return None
+
+    meta = pd.read_csv(meta_path)
+    matching = meta[meta['ticker'] == ticker]
+    if matching.empty:
+        return None
+
+    # Load X_test memory-mapped for efficiency
+    X_test = np.load(x_test_path, mmap_mode='r')
+
+    predictor = get_predictor()
+    if predictor is None:
+        return None
+
+    # Take last n_samples for the ticker
+    sample_indices = matching.index[-n_samples:]
+    results = []
+    for idx in sample_indices:
+        try:
+            sample_x = np.array(X_test[idx])  # Copy from mmap
+            pred = predictor.predict(sample_x)
+            results.append({
+                'date': matching.loc[idx, 'date'],
+                'ticker': ticker,
+                'pred_1d': pred['multi_horizon_predictions']['1d'],
+                'pred_5d': pred['multi_horizon_predictions']['5d'],
+                'pred_30d': pred['multi_horizon_predictions']['30d'],
+                'confidence': pred['confidence'],
+                'ensemble_weights': pred['ensemble_weights'],
+                'ts_ensemble': pred['ts_ensemble'],
+                'nlp_signals': pred.get('nlp_signals', {}),
+            })
+        except Exception as e:
+            logger.warning(f"Prediction failed for {ticker} idx={idx}: {e}")
+
+    return results if results else None
 
 
 # ─── Logs ─────────────────────────────────────────────────────────────────────
@@ -370,12 +719,10 @@ def get_disk_usage_summary():
 def get_training_history():
     """Extract real epoch/loss data from training log files."""
     import re
-    history = {}  # model_name -> [(epoch, train_loss, val_loss)]
+    history = {}
 
-    # Search for log files that contain training output
     log_files = glob.glob(os.path.join(PROJECT_ROOT, '**', '*.log'), recursive=True)
 
-    # Also check if there's a data_collection.log or similar with training output
     pattern1 = re.compile(r'\[(\w+)\]\s+Epoch\s+(\d+)/\d+\s+\|\s+Train:\s+([\d.]+)\s+\|\s+Val:\s+([\d.]+)')
     pattern2 = re.compile(r'Epoch\s+(\d+)\s+—\s+Train Loss:\s+([\d.]+)\s+\|\s+Val Loss:\s+([\d.]+)')
 
@@ -385,7 +732,7 @@ def get_training_history():
                 for line in f:
                     match1 = pattern1.search(line)
                     match2 = pattern2.search(line)
-                    
+
                     if match1:
                         model = match1.group(1)
                         epoch = int(match1.group(2))
@@ -398,7 +745,7 @@ def get_training_history():
                         val_loss = float(match2.group(3))
                     else:
                         continue
-                        
+
                     if model not in history:
                         history[model] = []
                     history[model].append({
@@ -409,7 +756,7 @@ def get_training_history():
         except Exception:
             pass
 
-    # Also try reading from stdout capture or mlflow
+    # Also try reading from MLflow
     try:
         import sqlite3
         db_path = os.path.join(PROJECT_ROOT, 'mlflow.db')
@@ -417,7 +764,7 @@ def get_training_history():
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT key, value, step FROM metrics 
+                SELECT key, value, step FROM metrics
                 WHERE key LIKE '%_train_loss' OR key LIKE '%_val_loss'
                 ORDER BY step
             """)
@@ -426,10 +773,10 @@ def get_training_history():
 
             mlflow_data = {}
             for key, value, step in rows:
-                parts = key.rsplit('_', 2)  # e.g. lstm_train_loss -> lstm, train, loss
+                parts = key.rsplit('_', 2)
                 if len(parts) >= 3:
                     model = parts[0]
-                    metric_type = parts[1]  # train or val
+                    metric_type = parts[1]
                     if model not in mlflow_data:
                         mlflow_data[model] = {}
                     if step not in mlflow_data[model]:
@@ -478,3 +825,152 @@ def get_pipeline_run_history():
             'files': s['files'],
         })
     return jobs
+
+
+# ─── Weather Data ─────────────────────────────────────────────────────────────
+
+def load_weather_data():
+    """Load weather data from all city CSV files."""
+    weather_dir = os.path.join(PROJECT_ROOT, 'data', 'raw', 'weather')
+    if not os.path.exists(weather_dir):
+        return None
+    frames = []
+    for f in sorted(os.listdir(weather_dir)):
+        if f.endswith('.csv'):
+            try:
+                df = pd.read_csv(os.path.join(weather_dir, f))
+                df['city'] = f.replace('.csv', '').replace('_', ' ')
+                frames.append(df)
+            except Exception:
+                pass
+    if not frames:
+        return None
+    return pd.concat(frames, ignore_index=True)
+
+
+# ─── Economic Indicators ────────────────────────────────────────────────────
+
+def load_economic_indicators():
+    """Load FRED economic indicators."""
+    path = os.path.join(PROJECT_ROOT, 'data', 'raw', 'financial', 'economic_indicators', 'fred_collector_2026-03-20.parquet')
+    if not os.path.exists(path):
+        # Try glob pattern for any dated file
+        matches = glob.glob(os.path.join(PROJECT_ROOT, 'data', 'raw', 'financial', 'economic_indicators', '*.parquet'))
+        if not matches:
+            return None
+        path = matches[0]
+    df = pd.read_parquet(path)
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
+# ─── Energy Data (EIA) ──────────────────────────────────────────────────────
+
+def load_energy_data():
+    """Load EIA energy data (electricity, crude oil, natural gas, coal)."""
+    matches = glob.glob(os.path.join(PROJECT_ROOT, 'data', 'raw', 'energy', '*.parquet'))
+    if not matches:
+        return None
+    df = pd.read_parquet(matches[0])
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
+# ─── News Articles (NewsAPI) ────────────────────────────────────────────────
+
+def load_news_articles():
+    """Load raw news articles from NewsAPI."""
+    news_dir = os.path.join(PROJECT_ROOT, 'data', 'raw', 'news', 'newsapi')
+    if not os.path.exists(news_dir):
+        return None
+    frames = []
+    for f in sorted(os.listdir(news_dir)):
+        fp = os.path.join(news_dir, f)
+        try:
+            if f.endswith('.csv'):
+                frames.append(pd.read_csv(fp))
+            elif f.endswith('.parquet'):
+                frames.append(pd.read_parquet(fp))
+        except Exception:
+            pass
+    if not frames:
+        return None
+    df = pd.concat(frames, ignore_index=True)
+    if 'published_at' in df.columns:
+        df['published_at'] = pd.to_datetime(df['published_at'], errors='coerce')
+    return df
+
+
+# ─── Research Papers (arXiv) ────────────────────────────────────────────────
+
+def load_research_papers():
+    """Load arXiv research papers."""
+    matches = glob.glob(os.path.join(PROJECT_ROOT, 'data', 'raw', 'research', '*.parquet'))
+    if not matches:
+        return None
+    df = pd.read_parquet(matches[0])
+    if 'published_date' in df.columns:
+        df['published_date'] = pd.to_datetime(df['published_date'], errors='coerce')
+    return df
+
+
+# ─── Patent Data (NASA) ─────────────────────────────────────────────────────
+
+def load_patent_data():
+    """Load NASA patent data."""
+    matches = glob.glob(os.path.join(PROJECT_ROOT, 'data', 'raw', 'patents', '*.parquet'))
+    if not matches:
+        return None
+    return pd.read_parquet(matches[0])
+
+
+# ─── Jobs Data (Adzuna + USAJobs) ───────────────────────────────────────────
+
+def load_jobs_data():
+    """Load job listings from Adzuna and USAJobs."""
+    jobs_dir = os.path.join(PROJECT_ROOT, 'data', 'raw', 'jobs')
+    if not os.path.exists(jobs_dir):
+        return None
+    frames = []
+    sources = []
+    for f in sorted(os.listdir(jobs_dir)):
+        fp = os.path.join(jobs_dir, f)
+        try:
+            if f.endswith('.parquet'):
+                df = pd.read_parquet(fp)
+                src = 'Adzuna' if 'adzuna' in f.lower() else 'USAJobs' if 'usajobs' in f.lower() else f
+                df['source'] = src
+                frames.append(df)
+        except Exception:
+            pass
+    if not frames:
+        return None
+    return pd.concat(frames, ignore_index=True)
+
+
+# ─── Trade Data (World Bank) ────────────────────────────────────────────────
+
+def load_trade_data():
+    """Load raw World Bank trade indicator data."""
+    matches = glob.glob(os.path.join(PROJECT_ROOT, 'data', 'raw', 'trade', '*.parquet'))
+    if not matches:
+        return None
+    df = pd.read_parquet(matches[0])
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    return df
+
+
+# ─── Population Data (UN) ───────────────────────────────────────────────────
+
+def load_population_data():
+    """Load raw UN population data."""
+    matches = glob.glob(os.path.join(PROJECT_ROOT, 'data', 'raw', 'population', '*.parquet'))
+    if not matches:
+        return None
+    df = pd.read_parquet(matches[0])
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    return df

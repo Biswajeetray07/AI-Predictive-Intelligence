@@ -18,6 +18,16 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
+try:
+    from src.cloud_storage.aws_storage import SimpleStorageService
+    s3_storage = SimpleStorageService()
+    USE_S3 = os.getenv("USE_S3", "True").lower() in ("true", "1", "yes")
+    S3_BUCKET = os.getenv("MODEL_BUCKET_NAME", "my-model-mlopsproj012")
+    logger.info(f"S3 integration initialized. USE_S3={USE_S3}")
+except Exception as e:
+    logger.warning(f"Failed to initialize S3 integration: {e}")
+    s3_storage = None
+    USE_S3 = False
 
 def get_project_root():
     return PROJECT_ROOT
@@ -369,6 +379,18 @@ def get_pipeline_stages():
 
 def load_stock_data(ticker='AAPL'):
     """Load processed stock data for a given ticker from Parquet files."""
+    if USE_S3 and s3_storage:
+        try:
+            df = s3_storage.read_parquet(f"data/processed/financial/stocks/{ticker}.parquet", S3_BUCKET)
+            if df is not None:
+                if 'date' in df.columns and 'Date' not in df.columns:
+                    df = df.rename(columns={'date': 'Date'})
+                if 'Date' in df.columns:
+                    df['Date'] = pd.to_datetime(df['Date'])
+                return df
+        except Exception as e:
+            logger.warning(f"S3 fetch failed for {ticker}: {e}")
+
     # Primary: processed parquet with technical indicators
     parquet_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'financial', 'stocks', f'{ticker}.parquet')
     if os.path.exists(parquet_path):
@@ -395,6 +417,15 @@ def load_stock_data(ticker='AAPL'):
 
 def list_available_tickers():
     """List all available stock tickers (from parquet first, then CSV)."""
+    if USE_S3 and s3_storage:
+        try:
+            keys = s3_storage.list_files("data/processed/financial/stocks/", S3_BUCKET)
+            tickers = sorted([os.path.basename(k).replace('.parquet', '') for k in keys if k.endswith('.parquet')])
+            if tickers:
+                return tickers
+        except Exception as e:
+            logger.warning(f"S3 list_tickers failed: {e}")
+
     # Processed parquet directory
     stocks_dir = os.path.join(PROJECT_ROOT, 'data', 'processed', 'financial', 'stocks')
     if os.path.exists(stocks_dir):
@@ -414,6 +445,12 @@ def list_available_tickers():
 
 def load_regime_states():
     """Load real HMM regime states from features/regime_states.csv."""
+    if USE_S3 and s3_storage:
+        df = s3_storage.read_csv("data/features/regime_states.csv", S3_BUCKET)
+        if df is not None:
+            df['date'] = pd.to_datetime(df['date'])
+            return df
+
     regime_path = os.path.join(PROJECT_ROOT, 'data', 'features', 'regime_states.csv')
     if not os.path.exists(regime_path):
         return None
@@ -440,6 +477,12 @@ def get_regime_label(regime_id):
 
 def load_social_signals():
     """Load aggregated social media signals."""
+    if USE_S3 and s3_storage:
+        df = s3_storage.read_csv("data/processed/social_media/social_signals.csv", S3_BUCKET)
+        if df is not None:
+            df['date'] = pd.to_datetime(df['date'])
+            return df
+
     path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'social_media', 'social_signals.csv')
     if not os.path.exists(path):
         return None
@@ -452,14 +495,20 @@ def load_social_signals():
 
 def load_macro_signals():
     """Load macro/FRED economic signals."""
-    path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'economy', 'macro_signals.csv')
-    if not os.path.exists(path):
-        return None
-    df = pd.read_csv(path)
-    df['date'] = pd.to_datetime(df['date'])
-    # Clean column names
-    df.columns = [c.replace('macro_fred_collector_2026-03-20', 'fred_value') if 'fred' in c.lower() else c for c in df.columns]
-    return df
+    if USE_S3 and s3_storage:
+        df = s3_storage.read_csv("data/processed/economy/macro_signals.csv", S3_BUCKET)
+    else:
+        path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'economy', 'macro_signals.csv')
+        if not os.path.exists(path):
+            return None
+        df = pd.read_csv(path)
+
+    if df is not None:
+        df['date'] = pd.to_datetime(df['date'])
+        # Clean column names
+        df.columns = [c.replace('macro_fred_collector_2026-03-20', 'fred_value') if 'fred' in c.lower() else c for c in df.columns]
+        return df
+    return None
 
 
 # ─── Crypto Data ─────────────────────────────────────────────────────────────
@@ -499,11 +548,15 @@ def list_crypto_coins():
 
 def load_nlp_signals():
     """Load NLP signals (sentiment, events, topics)."""
-    path = os.path.join(PROJECT_ROOT, 'data', 'features', 'nlp_signals.parquet')
-    if not os.path.exists(path):
-        return None
-    df = pd.read_parquet(path)
-    if 'date' in df.columns:
+    if USE_S3 and s3_storage:
+        df = s3_storage.read_parquet("data/features/nlp_signals.parquet", S3_BUCKET)
+    else:
+        path = os.path.join(PROJECT_ROOT, 'data', 'features', 'nlp_signals.parquet')
+        if not os.path.exists(path):
+            return None
+        df = pd.read_parquet(path)
+
+    if df is not None and 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'])
     return df
 
@@ -533,11 +586,15 @@ def load_nlp_label_quality():
 
 def load_alternative_data_index(name):
     """Load an alternative data index parquet file."""
-    path = os.path.join(PROJECT_ROOT, 'data', 'features', f'{name}.parquet')
-    if not os.path.exists(path):
-        return None
-    df = pd.read_parquet(path)
-    if 'date' in df.columns:
+    if USE_S3 and s3_storage:
+        df = s3_storage.read_parquet(f"data/features/{name}.parquet", S3_BUCKET)
+    else:
+        path = os.path.join(PROJECT_ROOT, 'data', 'features', f'{name}.parquet')
+        if not os.path.exists(path):
+            return None
+        df = pd.read_parquet(path)
+
+    if df is not None and 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'])
     return df
 

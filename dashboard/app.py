@@ -280,6 +280,36 @@ with st.sidebar:
             </div>
         </div>
         """, unsafe_allow_html=True)
+        
+        # S3 Status indicator
+        from dashboard.utils import USE_S3, S3_BUCKET
+        if USE_S3:
+            s3_status_color = '#10b981' # green
+            s3_status_text = 'Connected'
+        else:
+            s3_status_color = '#a1a1aa' # grey
+            s3_status_text = 'Local Only'
+            
+        st.markdown(f"""
+        <div style="padding: 12px; background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px solid #27272a; margin-top: 12px;">
+            <div style="font-size: 0.75rem; color: #f4f4f5; font-weight: 500; margin-bottom: 8px;">
+                Storage Mode
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="color: #a1a1aa; font-size: 0.75rem;">Backend</span>
+                <span style="color: {s3_status_color}; font-size: 0.75rem; font-family: 'Geist Mono';">
+                    ● {s3_status_text}
+                </span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="color: #a1a1aa; font-size: 0.75rem;">Bucket</span>
+                <span style="color: #3b82f6; font-size: 0.65rem; font-family: 'Geist Mono'; text-align:right">
+                    {S3_BUCKET if USE_S3 else 'N/A'}
+                </span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
     except Exception:
         pass
 

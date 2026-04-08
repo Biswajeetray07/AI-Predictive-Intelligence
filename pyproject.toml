@@ -41,6 +41,8 @@ dependencies = [
     "apscheduler",
     "xmltodict",
     "hmmlearn",
+    "boto3",
+    "s3fs",
 ]
 
 [project.optional-dependencies]

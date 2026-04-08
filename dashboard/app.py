@@ -77,6 +77,49 @@ PROMETHEUS_URL = st.secrets.get("PROMETHEUS_URL", "http://localhost:9090") if "P
 # APP CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
 
+try:
+    from src.cloud_storage.aws_storage import SimpleStorageService, USE_S3, S3_BUCKET
+except ImportError:
+    USE_S3 = False
+    S3_BUCKET = "N/A"
+
+# ─── S3 CLOUD BOOTLOADER ───────────────────────────────────────────────────────
+@st.cache_resource(show_spinner="Booting AI Engine from Cloud (One-time download)...")
+def initialize_s3_backend():
+    """
+    Downloads critical PyTorch models and Numpy memory-mapped objects from S3.
+    This runs exactly ONCE when the Streamlit Cloud server boots.
+    """
+    if not USE_S3:
+        return
+    
+    s3 = SimpleStorageService()
+    critical_files = [
+        "data/processed/model_inputs/X_test.npy",
+        "data/processed/model_inputs/metadata_test.csv",
+        "data/features/regime_states.csv",
+        "data/features/technical_indicators.parquet",
+        "saved_models/lstm_model.pt",
+        "saved_models/gru_model.pt",
+        "saved_models/transformer_model.pt",
+        "saved_models/tft_model.pt",
+        "saved_models/fusion_model.pt",
+        "saved_models/nlp_multitask_model.pt",
+        "saved_models/nlp_label_quality.json"
+    ]
+    
+    for relative_path in critical_files:
+        local_path = os.path.join(PROJECT_ROOT, relative_path)
+        if not os.path.exists(local_path):
+            try:
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                s3.download_file(relative_path, local_path, S3_BUCKET)
+            except Exception as e:
+                pass
+
+initialize_s3_backend()
+# ─────────────────────────────────────────────────────────────────────────────
+
 st.set_page_config(
     page_title="AI Predictive Intelligence",
     page_icon="🧠",

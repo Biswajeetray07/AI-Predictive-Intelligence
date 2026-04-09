@@ -96,7 +96,8 @@ class SimpleStorageService:
                 return None
                 
             model_obj = self.read_object(file_object, decode=False)
-            model = pickle.loads(model_obj)
+            import joblib
+            model = joblib.load(io.BytesIO(model_obj))
             return model
         except Exception as e:
             logger.error(f"Failed to load model {model_name} from S3: {e}")

@@ -68,18 +68,46 @@ class Predictor:
                 # Fallback to standard pickle
                 with open(path, 'rb') as f:
                     return pickle.load(f)
+
+        # Check S3 env vars
+        use_s3_env = os.getenv("USE_S3", "False").lower() in ("true", "1", "yes")
+        try:
+            import streamlit as st
+            use_s3_st = st.secrets.get("USE_S3", use_s3_env)
+            use_s3 = str(use_s3_st).lower() in ("true", "1", "yes")
+            bucket = st.secrets.get("MODEL_BUCKET_NAME", os.getenv("MODEL_BUCKET_NAME", "my-model-mlopsproj012"))
+        except Exception:
+            use_s3 = use_s3_env
+            bucket = os.getenv("MODEL_BUCKET_NAME", "my-model-mlopsproj012")
+            
+        def load_from_s3(s3_key):
+            if not use_s3: return None
+            try:
+                from src.cloud_storage.aws_storage import SimpleStorageService
+                s3 = SimpleStorageService()
+                logging.info(f"Loading scaler from S3: {s3_key}")
+                return s3.load_model(s3_key, bucket) # load_model essentially unpickles any object
+            except Exception as e:
+                logging.warning(f"Failed to load {s3_key} from S3: {e}")
+                return None
                     
         if os.path.exists(feature_scaler_path):
             try:
                 scalers['feature'] = load_scaler(feature_scaler_path)
             except Exception as e:
                 logging.warning(f"Failed to load feature scaler: {e}")
+        else:
+            s = load_from_s3('data/processed/model_inputs/feature_scaler.pkl')
+            if s: scalers['feature'] = s
                 
         if os.path.exists(target_scaler_path):
             try:
                 scalers['target'] = load_scaler(target_scaler_path)
             except Exception as e:
                 logging.warning(f"Failed to load target scaler: {e}")
+        else:
+            s = load_from_s3('data/processed/model_inputs/target_scaler.pkl')
+            if s: scalers['target'] = s
             
         return scalers
 

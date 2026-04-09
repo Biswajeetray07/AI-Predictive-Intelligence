@@ -147,6 +147,22 @@ class SimpleStorageService:
             logger.warning(f"Failed to read Parquet {filename} from S3: {e}")
             return None
 
+    def read_numpy(self, filename: str, bucket_name: str):
+        """
+        Reads a Numpy file (.npy) from the specified S3 bucket and converts it to a numpy array.
+        """
+        import numpy as np
+        try:
+            np_obj = self.get_file_object(filename, bucket_name)
+            if not np_obj:
+                return None
+            content = self.read_object(np_obj, decode=False)
+            arr = np.load(io.BytesIO(content))
+            return arr
+        except Exception as e:
+            logger.warning(f"Failed to read Numpy {filename} from S3: {e}")
+            return None
+
     def list_files(self, prefix: str, bucket_name: str) -> List[str]:
         """
         List all file keys under a specific prefix in the bucket.

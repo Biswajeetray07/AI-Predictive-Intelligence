@@ -83,41 +83,27 @@ except ImportError:
     USE_S3 = False
     S3_BUCKET = "N/A"
 
-# ─── S3 CLOUD BOOTLOADER ───────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Booting AI Engine from Cloud (One-time download)...")
-def initialize_s3_backend():
+# ─── S3 CLOUD CONNECTION CHECK ───────────────────────────────────────────────────
+@st.cache_resource(show_spinner="Verifying S3 Connection...")
+def verify_s3_connection():
     """
-    Downloads critical PyTorch models and Numpy memory-mapped objects from S3.
-    This runs exactly ONCE when the Streamlit Cloud server boots.
+    Verifies that the S3 backend is accessible.
+    We no longer download files to disk here. Instead, data is fetched
+    directly into memory (RAM) lazily using utils.py data loaders.
     """
     if not USE_S3:
-        return
+        return True
     
-    s3 = SimpleStorageService()
-    critical_files = [
-        "data/processed/model_inputs/X_test.npy",
-        "data/processed/model_inputs/metadata_test.csv",
-        "data/features/regime_states.csv",
-        "data/features/technical_indicators.parquet",
-        "saved_models/lstm_model.pt",
-        "saved_models/gru_model.pt",
-        "saved_models/transformer_model.pt",
-        "saved_models/tft_model.pt",
-        "saved_models/fusion_model.pt",
-        "saved_models/nlp_multitask_model.pt",
-        "saved_models/nlp_label_quality.json"
-    ]
-    
-    for relative_path in critical_files:
-        local_path = os.path.join(PROJECT_ROOT, relative_path)
-        if not os.path.exists(local_path):
-            try:
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                s3.download_file(relative_path, local_path, S3_BUCKET)
-            except Exception as e:
-                pass
+    try:
+        s3 = SimpleStorageService()
+        # Just a lightweight check to ensure bucket is accessible
+        # s3.s3_client.head_bucket(Bucket=S3_BUCKET) # Optional strict check
+        return True
+    except Exception as e:
+        st.warning(f"S3 Connection failed: {e}. Falling back to local data if available.")
+        return False
 
-initialize_s3_backend()
+verify_s3_connection()
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(

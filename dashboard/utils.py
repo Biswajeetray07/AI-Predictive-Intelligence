@@ -13,10 +13,16 @@ import pandas as pd
 import numpy as np
 import psutil
 import logging
+import streamlit as st
+import logging
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+import sys
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 try:
     from src.cloud_storage.aws_storage import SimpleStorageService
@@ -77,8 +83,28 @@ def count_saved_models():
     return len([f for f in glob.glob(os.path.join(model_dir, '**', '*.pt'), recursive=True)])
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _get_manifest():
+    if USE_S3 and s3_storage:
+        try:
+            file_obj = s3_storage.get_file_object("data_manifest.json", S3_BUCKET)
+            if file_obj:
+                content = s3_storage.read_object(file_obj, make_readable=True)
+                return json.load(content)
+        except Exception as e:
+            logger.warning(f"S3 manifest fetch failed: {e}")
+    m_path = os.path.join(PROJECT_ROOT, 'data_manifest.json')
+    if os.path.exists(m_path):
+        with open(m_path, 'r') as f:
+            return json.load(f)
+    return None
+
 def get_overview_kpis():
     """Return dict of overview KPIs."""
+    manifest = _get_manifest()
+    if manifest and 'kpis' in manifest:
+        return manifest['kpis']
+        
     if USE_S3:
         return {
             'total_records': 8500240, 
@@ -121,6 +147,10 @@ def _count_data_sources():
 
 def get_data_sources_info():
     """Scan data/raw/ for all source directories and their stats."""
+    manifest = _get_manifest()
+    if manifest and 'sources' in manifest:
+        return manifest['sources']
+        
     if USE_S3:
         # Mock high-level sources info for UI display when fetching from S3
         return [
@@ -396,6 +426,7 @@ def get_pipeline_stages():
 
 # ─── Stock/Financial Data (FIXED: reads Parquet) ─────────────────────────────
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_stock_data(ticker='AAPL'):
     """Load processed stock data for a given ticker from Parquet files."""
     if USE_S3 and s3_storage:
@@ -462,6 +493,7 @@ def list_available_tickers():
 
 # ─── Regime States (Real HMM data) ───────────────────────────────────────────
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_regime_states():
     """Load real HMM regime states from features/regime_states.csv."""
     if USE_S3 and s3_storage:
@@ -494,6 +526,7 @@ def get_regime_label(regime_id):
 
 # ─── Social Media Signals ────────────────────────────────────────────────────
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_social_signals():
     """Load aggregated social media signals."""
     if USE_S3 and s3_storage:
@@ -512,6 +545,7 @@ def load_social_signals():
 
 # ─── Macro / Economic Signals ────────────────────────────────────────────────
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_macro_signals():
     """Load macro/FRED economic signals."""
     if USE_S3 and s3_storage:
@@ -532,21 +566,35 @@ def load_macro_signals():
 
 # ─── Crypto Data ─────────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_crypto_data():
     """Load all crypto price data."""
-    crypto_dir = os.path.join(PROJECT_ROOT, 'data', 'raw', 'financial', 'crypto')
-    if not os.path.exists(crypto_dir):
-        return None
     frames = []
-    for f in sorted(os.listdir(crypto_dir)):
-        if f.endswith('.csv'):
-            try:
-                df = pd.read_csv(os.path.join(crypto_dir, f))
-                frames.append(df)
-            except Exception:
-                pass
+    
+    if USE_S3 and s3_storage:
+        keys = s3_storage.list_files("data/raw/financial/crypto/", S3_BUCKET)
+        for k in keys:
+            if k.endswith('.csv'):
+                try:
+                    df = s3_storage.read_csv(k, S3_BUCKET)
+                    if df is not None:
+                        frames.append(df)
+                except Exception:
+                    pass
+    else:
+        crypto_dir = os.path.join(PROJECT_ROOT, 'data', 'raw', 'financial', 'crypto')
+        if os.path.exists(crypto_dir):
+            for f in sorted(os.listdir(crypto_dir)):
+                if f.endswith('.csv'):
+                    try:
+                        df = pd.read_csv(os.path.join(crypto_dir, f))
+                        frames.append(df)
+                    except Exception:
+                        pass
+                        
     if not frames:
         return None
+        
     result = pd.concat(frames, ignore_index=True)
     if 'date' in result.columns:
         result['date'] = pd.to_datetime(result['date'])
@@ -554,9 +602,15 @@ def load_crypto_data():
         result['timestamp'] = pd.to_datetime(result['timestamp'])
     return result
 
-
 def list_crypto_coins():
     """List available crypto coins."""
+    if USE_S3 and s3_storage:
+        try:
+            keys = s3_storage.list_files("data/raw/financial/crypto/", S3_BUCKET)
+            return sorted([os.path.basename(k).replace('.csv', '').replace('-', ' ').title() for k in keys if k.endswith('.csv')])
+        except Exception:
+            return []
+            
     crypto_dir = os.path.join(PROJECT_ROOT, 'data', 'raw', 'financial', 'crypto')
     if not os.path.exists(crypto_dir):
         return []
@@ -565,6 +619,7 @@ def list_crypto_coins():
 
 # ─── NLP Signals ─────────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_nlp_signals():
     """Load NLP signals (sentiment, events, topics)."""
     if USE_S3 and s3_storage:
@@ -603,6 +658,7 @@ def load_nlp_label_quality():
 
 # ─── Alternative Data Indices ────────────────────────────────────────────────
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_alternative_data_index(name):
     """Load an alternative data index parquet file."""
     if USE_S3 and s3_storage:
@@ -646,6 +702,7 @@ def get_alternative_data_summary():
 
 # ─── Technical Indicators ────────────────────────────────────────────────────
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_technical_indicators(ticker=None):
     """Load technical indicators from features."""
     path = os.path.join(PROJECT_ROOT, 'data', 'features', 'technical_indicators.parquet')
@@ -687,6 +744,7 @@ def get_predictor():
         return None
 
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_test_metadata():
     """Load metadata_test.csv for available test predictions."""
     path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'model_inputs', 'metadata_test.csv')

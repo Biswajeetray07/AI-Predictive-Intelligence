@@ -23,6 +23,15 @@ class S3Client:
             __access_key_id = os.getenv(AWS_ACCESS_KEY_ID_ENV_KEY)
             __secret_access_key = os.getenv(AWS_SECRET_ACCESS_KEY_ENV_KEY)
             
+            if not __access_key_id or not __secret_access_key:
+                try:
+                    import streamlit as st
+                    if AWS_ACCESS_KEY_ID_ENV_KEY in st.secrets:
+                        __access_key_id = st.secrets[AWS_ACCESS_KEY_ID_ENV_KEY]
+                        __secret_access_key = st.secrets.get(AWS_SECRET_ACCESS_KEY_ENV_KEY, "")
+                except Exception:
+                    pass
+            
             if __access_key_id and __secret_access_key:
                 S3Client.s3_resource = boto3.resource('s3',
                                                 aws_access_key_id=__access_key_id,

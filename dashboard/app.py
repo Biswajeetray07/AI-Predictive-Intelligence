@@ -78,10 +78,12 @@ PROMETHEUS_URL = st.secrets.get("PROMETHEUS_URL", "http://localhost:9090") if "P
 # ═══════════════════════════════════════════════════════════════════════════════
 
 try:
-    from src.cloud_storage.aws_storage import SimpleStorageService, USE_S3, S3_BUCKET
+    from dashboard.utils import USE_S3, S3_BUCKET, s3_storage
+    from src.cloud_storage.aws_storage import SimpleStorageService
 except ImportError:
     USE_S3 = False
     S3_BUCKET = "N/A"
+    s3_storage = None
 
 # ─── S3 CLOUD CONNECTION CHECK ───────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Verifying S3 Connection...")
@@ -917,10 +919,25 @@ def page_model_evaluation():
     y_test_path = os.path.join(PROJECT_ROOT, "data", "processed", "model_inputs", "y_test.npy")
     y_multi_path = os.path.join(PROJECT_ROOT, "data", "processed", "model_inputs", "y_multi_test.npy")
 
+    # Load test metadata — local first, then S3 fallback
+    meta = None
+    y_test = None
+    y_multi = None
+
     if os.path.exists(meta_path) and os.path.exists(y_test_path):
         meta = pd.read_csv(meta_path)
         y_test = np.load(y_test_path)
         y_multi = np.load(y_multi_path) if os.path.exists(y_multi_path) else None
+    elif USE_S3:
+        try:
+            _s3 = SimpleStorageService()
+            meta = _s3.read_csv('data/processed/model_inputs/metadata_test.csv', S3_BUCKET)
+            y_test = _s3.read_numpy('data/processed/model_inputs/y_test.npy', S3_BUCKET)
+            y_multi = _s3.read_numpy('data/processed/model_inputs/y_multi_test.npy', S3_BUCKET)
+        except Exception as e:
+            st.warning(f"S3 test data load failed: {e}")
+
+    if meta is not None and y_test is not None:
 
         m1, m2, m3, m4 = st.columns(4)
         with m1:

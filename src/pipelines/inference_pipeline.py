@@ -393,6 +393,37 @@ class Predictor:
             logging.warning(f"Failed to load dynamic regime properties: {e}")
             return default_idx
 
+    def predict_live(self, ticker: str, as_of_date: str = None, nlp_texts: Optional[List[str]] = None) -> Dict:
+        """
+        High-level real-time inference: given just a ticker, build features on-the-fly
+        and return multi-horizon predictions.
+
+        This method completely decouples inference from X_test.npy / metadata_test.csv.
+
+        Args:
+            ticker: Stock ticker symbol (e.g. 'AAPL')
+            as_of_date: Optional cutoff date (YYYY-MM-DD). Uses latest data if None.
+            nlp_texts: Optional list of news texts for NLP signal fusion.
+
+        Returns:
+            Dict with 'multi_horizon_predictions', 'confidence', 'ensemble_weights', etc.
+            Returns None if feature construction fails.
+        """
+        try:
+            from src.pipelines.feature_builder import RealTimeFeatureBuilder
+            builder = RealTimeFeatureBuilder(project_root=PROJECT_ROOT)
+            sequence = builder.build_sequence(ticker, as_of_date=as_of_date)
+            if sequence is None:
+                logging.warning(f"predict_live: could not build features for {ticker}")
+                return None
+            return self.predict(sequence, nlp_texts=nlp_texts)
+        except ImportError:
+            logging.error("predict_live requires src.pipelines.feature_builder module")
+            return None
+        except Exception as e:
+            logging.error(f"predict_live failed for {ticker}: {e}")
+            return None
+
 def run_test_inference():
     """Run inference on a synthetic sample to verify pipeline logic."""
     predictor = Predictor()

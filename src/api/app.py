@@ -96,24 +96,54 @@ def get_predictor():
 
 
 def load_data_caches():
-    """Load metadata and feature caches"""
+    """Load metadata and feature caches.
+    
+    Resolution order:
+    1. Local filesystem (fastest — mmap support)
+    2. S3 streaming (cloud/container deployment fallback)
+    
+    Both paths are optional; API endpoints that need live inference
+    can use the RealTimeFeatureBuilder (Phase 2) instead.
+    """
     global _metadata_cache, _features_cache
-    if _metadata_cache is None or _features_cache is None:
-        try:
-            from src.utils.pipeline_utils import get_project_root
-            root = get_project_root()
-            metadata_path = os.path.join(root, 'data', 'processed', 'model_inputs', 'metadata_test.csv')
-            x_test_path = os.path.join(root, 'data', 'processed', 'model_inputs', 'X_test.npy')
-            
-            if not os.path.exists(metadata_path) or not os.path.exists(x_test_path):
-                raise FileNotFoundError("Test data not found. Run the data pipeline first.")
-                
-            _metadata_cache = pd.read_csv(metadata_path)
-            _features_cache = np.load(x_test_path, mmap_mode='r')
-            logger.info(f"✅ Loaded test data cache: {_metadata_cache.shape[0]} sequences")
-        except Exception as e:
-            logger.error(f"❌ Failed to load data caches: {e}")
-            raise
+    if _metadata_cache is not None and _features_cache is not None:
+        return  # Already loaded
+
+    try:
+        from src.utils.pipeline_utils import get_project_root
+        root = get_project_root()
+    except ImportError:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+    metadata_path = os.path.join(root, 'data', 'processed', 'model_inputs', 'metadata_test.csv')
+    x_test_path = os.path.join(root, 'data', 'processed', 'model_inputs', 'X_test.npy')
+
+    # Strategy 1: Local filesystem
+    if os.path.exists(metadata_path) and os.path.exists(x_test_path):
+        _metadata_cache = pd.read_csv(metadata_path)
+        _features_cache = np.load(x_test_path, mmap_mode='r')
+        logger.info(f"✅ Loaded test data cache (local): {_metadata_cache.shape[0]} sequences")
+        return
+
+    # Strategy 2: S3 streaming fallback
+    try:
+        from src.cloud_storage.aws_storage import SimpleStorageService
+        s3_bucket = os.getenv("MODEL_BUCKET_NAME", "my-model-mlopsproj012")
+        use_s3 = os.getenv("USE_S3", "False").lower() in ("true", "1", "yes")
+        if use_s3:
+            s3 = SimpleStorageService()
+            _metadata_cache = s3.read_csv('data/processed/model_inputs/metadata_test.csv', s3_bucket)
+            _features_cache = s3.read_numpy('data/processed/model_inputs/X_test.npy', s3_bucket)
+            if _metadata_cache is not None and _features_cache is not None:
+                logger.info(f"✅ Loaded test data cache (S3): {_metadata_cache.shape[0]} sequences")
+                return
+    except Exception as e:
+        logger.warning(f"S3 fallback for test data caches failed: {e}")
+
+    # Neither source available — log warning but don't crash
+    # Endpoints can still work via RealTimeFeatureBuilder (Phase 2)
+    logger.warning("⚠️  Test data caches not available (local or S3). "
+                    "Prediction endpoints will use live feature builder or return 404.")
 
 # ============================================================================
 # Startup & Shutdown Events
@@ -199,23 +229,35 @@ async def predict(
             logger.error(f"❌ Server initialization failed: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Server not ready: {str(e)}")
         
-        if _metadata_cache is None or _features_cache is None:
-            raise HTTPException(status_code=500, detail="Data caches not loaded")
-            
-        # Find matching row in test set
-        matches = _metadata_cache[
-            (_metadata_cache['ticker'] == request.ticker) & 
-            (_metadata_cache['date'] == request.date)
-        ]
+        sample_x = None
         
-        if matches.empty:
+        # Strategy 1: Test data cache lookup
+        if _metadata_cache is not None and _features_cache is not None:
+            matches = _metadata_cache[
+                (_metadata_cache['ticker'] == request.ticker) & 
+                (_metadata_cache['date'] == request.date)
+            ]
+            if not matches.empty:
+                idx = matches.index[0]
+                sample_x = _features_cache[idx]
+
+        # Strategy 2: Live feature builder (decoupled from test data)
+        if sample_x is None:
+            try:
+                from src.pipelines.feature_builder import RealTimeFeatureBuilder
+                builder = RealTimeFeatureBuilder()
+                sample_x = builder.build_sequence(request.ticker, as_of_date=request.date)
+            except ImportError:
+                logger.debug("RealTimeFeatureBuilder not available")
+            except Exception as e:
+                logger.warning(f"Live feature builder failed for {request.ticker}: {e}")
+
+        if sample_x is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"No data for {request.ticker} on {request.date}"
+                detail=f"No data for {request.ticker} on {request.date}. "
+                       f"Neither test cache nor live features available."
             )
-            
-        idx = matches.index[0]
-        sample_x = _features_cache[idx]
         
         try:
             # Track inference latency

@@ -20,6 +20,11 @@ services:
       - PYTHONUNBUFFERED=1
       - API_KEY=${API_KEY:-predictive_intel_dev_key_2026}
       - LOG_LEVEL=INFO
+      - USE_S3=${USE_S3:-True}
+      - MODEL_BUCKET_NAME=${MODEL_BUCKET_NAME:-my-model-mlopsproj012}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "-H", "X-API-Key: predictive_intel_dev_key_2026", "http://localhost:8000/health"]
@@ -89,6 +94,11 @@ services:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
       - API_KEY=${API_KEY:-predictive_intel_dev_key_2026}
+      - USE_S3=${USE_S3:-True}
+      - MODEL_BUCKET_NAME=${MODEL_BUCKET_NAME:-my-model-mlopsproj012}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
     restart: unless-stopped
     networks:
       - predictive-net

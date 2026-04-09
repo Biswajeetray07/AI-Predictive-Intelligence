@@ -108,6 +108,8 @@ def main():
         "data/raw/**/*.json",
         "data/processed/**/*.parquet",
         "data/processed/**/*.csv",
+        "data/processed/**/feature_scaler.pkl",  # Critical for RealTimeFeatureBuilder
+        "data/processed/**/target_scaler.pkl",   # Critical for inverse-scaling predictions
         "data/features/**/*.parquet",
         "data/features/**/*.csv",
         "data/features/**/*.npy",

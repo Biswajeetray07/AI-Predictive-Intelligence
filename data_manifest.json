@@ -1,0 +1,146 @@
+{
+    "sources": [
+        {
+            "name": "Aviation",
+            "directory": "aviation",
+            "files": 2,
+            "records": 11914,
+            "size_mb": 0.53,
+            "last_updated": "2026-03-20 20:49",
+            "status": "Active"
+        },
+        {
+            "name": "Blockchain",
+            "directory": "blockchain",
+            "files": 1,
+            "records": 5806,
+            "size_mb": 0.05,
+            "last_updated": "2026-03-20 21:05",
+            "status": "Active"
+        },
+        {
+            "name": "Energy",
+            "directory": "energy",
+            "files": 1,
+            "records": 6364,
+            "size_mb": 0.03,
+            "last_updated": "2026-03-20 20:49",
+            "status": "Active"
+        },
+        {
+            "name": "Financial / Crypto",
+            "directory": "crypto",
+            "files": 100,
+            "records": 34099,
+            "size_mb": 2.07,
+            "last_updated": "2026-03-20 20:27",
+            "status": "Active"
+        },
+        {
+            "name": "Financial / Stocks",
+            "directory": "stocks",
+            "files": 502,
+            "records": 1369796,
+            "size_mb": 125.09,
+            "last_updated": "2026-03-20 19:59",
+            "status": "Active"
+        },
+        {
+            "name": "Financial / Alpha Vantage",
+            "directory": "alpha_vantage",
+            "files": 2,
+            "records": 200,
+            "size_mb": 0.01,
+            "last_updated": "2026-03-20 20:00",
+            "status": "Active"
+        },
+        {
+            "name": "Financial / Economic Indicators",
+            "directory": "economic_indicators",
+            "files": 1,
+            "records": 134724,
+            "size_mb": 0.72,
+            "last_updated": "2026-03-20 20:27",
+            "status": "Active"
+        },
+        {
+            "name": "Jobs",
+            "directory": "jobs",
+            "files": 2,
+            "records": 5049,
+            "size_mb": 1.33,
+            "last_updated": "2026-03-20 20:59",
+            "status": "Active"
+        },
+        {
+            "name": "News / Newsapi",
+            "directory": "newsapi",
+            "files": 1,
+            "records": 217,
+            "size_mb": 0.06,
+            "last_updated": "2026-03-20 19:44",
+            "status": "Active"
+        },
+        {
+            "name": "Patents",
+            "directory": "patents",
+            "files": 1,
+            "records": 335,
+            "size_mb": 0.2,
+            "last_updated": "2026-03-20 20:49",
+            "status": "Active"
+        },
+        {
+            "name": "Population",
+            "directory": "population",
+            "files": 1,
+            "records": 6480,
+            "size_mb": 0.06,
+            "last_updated": "2026-03-20 21:05",
+            "status": "Active"
+        },
+        {
+            "name": "Research",
+            "directory": "research",
+            "files": 1,
+            "records": 8003,
+            "size_mb": 5.18,
+            "last_updated": "2026-03-20 20:49",
+            "status": "Active"
+        },
+        {
+            "name": "Social Media",
+            "directory": "social_media",
+            "files": 7,
+            "records": 12445,
+            "size_mb": 3.81,
+            "last_updated": "2026-03-20 19:44",
+            "status": "Active"
+        },
+        {
+            "name": "Trade",
+            "directory": "trade",
+            "files": 1,
+            "records": 2548,
+            "size_mb": 0.03,
+            "last_updated": "2026-03-20 20:32",
+            "status": "Active"
+        },
+        {
+            "name": "Weather",
+            "directory": "weather",
+            "files": 101,
+            "records": 101,
+            "size_mb": 0.01,
+            "last_updated": "2026-03-20 20:28",
+            "status": "Active"
+        }
+    ],
+    "kpis": {
+        "total_records": 1598081,
+        "data_sources": 15,
+        "features_generated": 11,
+        "models_saved": 13,
+        "active_apis": 12
+    }
+}

@@ -27,13 +27,30 @@ if PROJECT_ROOT not in sys.path:
 try:
     from src.cloud_storage.aws_storage import SimpleStorageService
     s3_storage = SimpleStorageService()
-    USE_S3 = os.getenv("USE_S3", "True").lower() in ("true", "1", "yes")
-    S3_BUCKET = os.getenv("MODEL_BUCKET_NAME", "my-model-mlopsproj012")
-    logger.info(f"S3 integration initialized. USE_S3={USE_S3}")
+
+    # Resolve USE_S3: env var → st.secrets → default True
+    _use_s3_raw = os.getenv("USE_S3")
+    if _use_s3_raw is None:
+        try:
+            _use_s3_raw = st.secrets.get("USE_S3", "True")
+        except Exception:
+            _use_s3_raw = "True"
+    USE_S3 = str(_use_s3_raw).lower() in ("true", "1", "yes")
+
+    # Resolve bucket name: env var → st.secrets → default
+    S3_BUCKET = os.getenv("MODEL_BUCKET_NAME")
+    if not S3_BUCKET:
+        try:
+            S3_BUCKET = st.secrets.get("MODEL_BUCKET_NAME", "my-model-mlopsproj012")
+        except Exception:
+            S3_BUCKET = "my-model-mlopsproj012"
+
+    logger.info(f"S3 integration initialized. USE_S3={USE_S3}, bucket={S3_BUCKET}")
 except Exception as e:
     logger.warning(f"Failed to initialize S3 integration: {e}")
     s3_storage = None
     USE_S3 = False
+    S3_BUCKET = "my-model-mlopsproj012"
 
 def get_project_root():
     return PROJECT_ROOT
@@ -727,33 +744,89 @@ def get_predictor():
 
 @st.cache_data(ttl=600, show_spinner=False)
 def load_test_metadata():
-    """Load metadata_test.csv for available test predictions."""
+    """Load metadata_test.csv for available test predictions.
+    Falls back to S3 streaming when local file is absent (cloud deployment).
+    """
     path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'model_inputs', 'metadata_test.csv')
-    if not os.path.exists(path):
-        return None
-    df = pd.read_csv(path)
-    df['date'] = pd.to_datetime(df['date'])
-    return df
+    if os.path.exists(path):
+        df = pd.read_csv(path)
+        df['date'] = pd.to_datetime(df['date'])
+        return df
+
+    # S3 fallback
+    if USE_S3 and s3_storage:
+        try:
+            df = s3_storage.read_csv('data/processed/model_inputs/metadata_test.csv', S3_BUCKET)
+            if df is not None:
+                df['date'] = pd.to_datetime(df['date'])
+                return df
+        except Exception as e:
+            logger.warning(f"S3 fallback for metadata_test.csv failed: {e}")
+
+    return None
 
 
 def run_prediction_for_ticker(ticker, n_samples=5):
     """
-    Run real model inference for a ticker using test data.
-    Returns list of prediction dicts.
+    Run real model inference for a ticker.
+    
+    Resolution order:
+    1. Try live feature builder (no test data needed)
+    2. Try local test data (X_test.npy + metadata_test.csv)
+    3. Try S3-streamed test data (cloud deployment fallback)
+    
+    Returns list of prediction dicts, or None if inference is unavailable.
     """
+    # ── Strategy 1: Live Feature Builder (Phase 2 — decoupled inference) ──
+    try:
+        from src.pipelines.feature_builder import RealTimeFeatureBuilder
+        builder = RealTimeFeatureBuilder()
+        predictor = get_predictor()
+        if predictor is not None:
+            sequence = builder.build_sequence(ticker)
+            if sequence is not None:
+                pred = predictor.predict(sequence)
+                return [{
+                    'date': pd.Timestamp.now().strftime('%Y-%m-%d'),
+                    'ticker': ticker,
+                    'pred_1d': pred['multi_horizon_predictions']['1d'],
+                    'pred_5d': pred['multi_horizon_predictions']['5d'],
+                    'pred_30d': pred['multi_horizon_predictions']['30d'],
+                    'confidence': pred['confidence'],
+                    'ensemble_weights': pred['ensemble_weights'],
+                    'ts_ensemble': pred['ts_ensemble'],
+                    'nlp_signals': pred.get('nlp_signals', {}),
+                }]
+    except ImportError:
+        logger.debug("RealTimeFeatureBuilder not available, falling back to test data lookup.")
+    except Exception as e:
+        logger.warning(f"Live feature builder failed for {ticker}: {e}")
+
+    # ── Strategy 2 & 3: Test Data Lookup (local → S3) ──
     meta_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'model_inputs', 'metadata_test.csv')
     x_test_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'model_inputs', 'X_test.npy')
 
-    if not os.path.exists(meta_path) or not os.path.exists(x_test_path):
+    meta = None
+    X_test = None
+
+    # Strategy 2: Local files
+    if os.path.exists(meta_path) and os.path.exists(x_test_path):
+        meta = pd.read_csv(meta_path)
+        X_test = np.load(x_test_path, mmap_mode='r')
+    # Strategy 3: S3 streaming fallback
+    elif USE_S3 and s3_storage:
+        try:
+            meta = s3_storage.read_csv('data/processed/model_inputs/metadata_test.csv', S3_BUCKET)
+            X_test = s3_storage.read_numpy('data/processed/model_inputs/X_test.npy', S3_BUCKET)
+        except Exception as e:
+            logger.warning(f"S3 fallback for test data failed: {e}")
+
+    if meta is None or X_test is None:
         return None
 
-    meta = pd.read_csv(meta_path)
     matching = meta[meta['ticker'] == ticker]
     if matching.empty:
         return None
-
-    # Load X_test memory-mapped for efficiency
-    X_test = np.load(x_test_path, mmap_mode='r')
 
     predictor = get_predictor()
     if predictor is None:

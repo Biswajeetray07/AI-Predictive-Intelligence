@@ -141,7 +141,7 @@ class RealTimeFeatureBuilder:
         1. Individual processed stock parquet (faster, per-ticker)
         2. Merged dataset CSV (all tickers, may be large)
         """
-        # Strategy 1: Individual processed parquet per ticker
+        # Priority 1: Individual processed parquet per ticker (local)
         if ticker:
             parquet_path = os.path.join(
                 self.project_root, 'data', 'processed', 'financial', 'stocks', f'{ticker}.parquet'
@@ -154,7 +154,7 @@ class RealTimeFeatureBuilder:
                     df['ticker'] = ticker
                 return df
 
-        # Strategy 2: Full merged dataset
+        # Priority 2: Full merged dataset (local)
         merged_path = os.path.join(
             self.project_root, 'data', 'processed', 'merged', 'all_merged_dataset.csv'
         )
@@ -173,6 +173,33 @@ class RealTimeFeatureBuilder:
             if ticker:
                 return self._merged_df[self._merged_df['ticker'] == ticker].copy()
             return self._merged_df
+
+        # Priority 3: S3 Parquet fetch (Cloud / Streamlit App mode)
+        use_s3_env = os.getenv("USE_S3", "False").lower() in ("true", "1", "yes")
+        try:
+            import streamlit as st
+            use_s3_st = st.secrets.get("USE_S3", use_s3_env)
+            use_s3 = str(use_s3_st).lower() in ("true", "1", "yes")
+            bucket = st.secrets.get("MODEL_BUCKET_NAME", os.getenv("MODEL_BUCKET_NAME", "my-model-mlopsproj012"))
+        except Exception:
+            use_s3 = use_s3_env
+            bucket = os.getenv("MODEL_BUCKET_NAME", "my-model-mlopsproj012")
+
+        if use_s3 and ticker:
+            try:
+                from src.cloud_storage.aws_storage import SimpleStorageService
+                s3 = SimpleStorageService()
+                s3_key = f'data/processed/financial/stocks/{ticker}.parquet'
+                logger.info(f"Loading {ticker} features from S3...")
+                df = s3.read_parquet(s3_key, bucket)
+                if df is not None:
+                    if 'date' in df.columns:
+                        df['date'] = pd.to_datetime(df['date'])
+                    if 'ticker' not in df.columns:
+                        df['ticker'] = ticker
+                    return df
+            except Exception as e:
+                logger.warning(f"Failed to load S3 parquet for {ticker}: {e}")
 
         return None
 

@@ -304,12 +304,9 @@ def get_datasets_info():
 # ─── Models ───────────────────────────────────────────────────────────────────
 
 def get_model_info():
-    """Discover saved model artifacts with proper classification."""
-    model_dir = os.path.join(PROJECT_ROOT, 'saved_models')
+    """Discover saved model artifacts with proper classification (from local or S3)."""
     models = []
-    if not os.path.exists(model_dir):
-        return models
-
+    
     # Classification map
     model_types = {
         'lstm': ('Time Series', 'LSTM (Long Short-Term Memory)'),
@@ -321,40 +318,80 @@ def get_model_info():
         'fusion': ('Fusion', 'Cross-Attention Multi-Horizon Fusion'),
     }
 
-    for f in glob.glob(os.path.join(model_dir, '**', '*.pt'), recursive=True):
-        name = os.path.basename(f).replace('_model.pt', '').replace('.pt', '')
-        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(f))
-        size_mb = round(os.path.getsize(f) / (1024 * 1024), 2)
-
-        model_type = 'Unknown'
-        algorithm = 'N/A'
+    model_dir = os.path.join(PROJECT_ROOT, 'saved_models')
+    
+    # helper for metadata
+    def identify_model(name):
         for key, (mt, alg) in model_types.items():
             if key in name.lower():
-                model_type = mt
-                algorithm = alg
-                break
+                return mt, alg
+        return 'Unknown', 'N/A'
 
-        models.append({
-            'name': name,
-            'type': model_type,
-            'algorithm': algorithm,
-            'size_mb': size_mb,
-            'trained_at': mtime.strftime('%Y-%m-%d %H:%M'),
-            'path': f,
-        })
+    # Try local first
+    if os.path.exists(model_dir):
+        for f in glob.glob(os.path.join(model_dir, '**', '*.pt'), recursive=True):
+            name = os.path.basename(f).replace('_model.pt', '').replace('.pt', '')
+            mtime = datetime.datetime.fromtimestamp(os.path.getmtime(f))
+            size_mb = round(os.path.getsize(f) / (1024 * 1024), 2)
+            model_type, algorithm = identify_model(name)
 
-    # Also include the regime model (pkl)
-    regime_path = os.path.join(model_dir, 'regime_model.pkl')
-    if os.path.exists(regime_path):
-        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(regime_path))
-        models.append({
-            'name': 'regime_hmm',
-            'type': 'Regime Detection',
-            'algorithm': 'Hidden Markov Model (5 states)',
-            'size_mb': round(os.path.getsize(regime_path) / (1024 * 1024), 3),
-            'trained_at': mtime.strftime('%Y-%m-%d %H:%M'),
-            'path': regime_path,
-        })
+            models.append({
+                'name': name,
+                'type': model_type,
+                'algorithm': algorithm,
+                'size_mb': size_mb,
+                'trained_at': mtime.strftime('%Y-%m-%d %H:%M'),
+                'path': f,
+            })
+
+        # Include regime model (pkl)
+        regime_path = os.path.join(model_dir, 'regime_model.pkl')
+        if os.path.exists(regime_path):
+            mtime = datetime.datetime.fromtimestamp(os.path.getmtime(regime_path))
+            models.append({
+                'name': 'regime_hmm',
+                'type': 'Regime Detection',
+                'algorithm': 'Hidden Markov Model (5 states)',
+                'size_mb': round(os.path.getsize(regime_path) / (1024 * 1024), 3),
+                'trained_at': mtime.strftime('%Y-%m-%d %H:%M'),
+                'path': regime_path,
+            })
+
+    # Fallback to S3
+    if not models and USE_S3 and s3_storage:
+        try:
+            # We list all keys under saved_models/
+            s3_keys = s3_storage.list_files("saved_models/", S3_BUCKET)
+            for key in s3_keys:
+                if key.endswith(".pt") or key.endswith("regime_model.pkl"):
+                    name = os.path.basename(key).replace('_model.pt', '').replace('.pt', '').replace('.pkl', '')
+                    meta = s3_storage.get_file_metadata(key, S3_BUCKET)
+                    
+                    if meta:
+                        size_mb = round(meta['size'] / (1024 * 1024), 2)
+                        mtime = meta['last_modified']
+                        trained_at = mtime.strftime('%Y-%m-%d %H:%M') if mtime else 'N/A'
+                    else:
+                        size_mb = 0
+                        trained_at = 'N/A'
+
+                    if "regime_model" in key:
+                        model_type = 'Regime Detection'
+                        algorithm = 'Hidden Markov Model (5 states)'
+                        name = "regime_hmm"
+                    else:
+                        model_type, algorithm = identify_model(name)
+
+                    models.append({
+                        'name': name,
+                        'type': model_type,
+                        'algorithm': algorithm,
+                        'size_mb': size_mb,
+                        'trained_at': trained_at,
+                        'path': f"s3://{S3_BUCKET}/{key}",
+                    })
+        except Exception as e:
+            logger.warning(f"Failed to fetch model info from S3: {e}")
 
     return models
 

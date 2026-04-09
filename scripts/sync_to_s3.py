@@ -114,6 +114,8 @@ def main():
         "data/features/**/*.csv",
         "data/features/**/*.npy",
         "data/processed/**/X_test.npy",      # Only the test tensor (889 MB)
+        "data/processed/**/y_test.npy",      # Test labels
+        "data/processed/**/y_multi_test.npy", # Multi-horizon test labels
         "data/processed/**/metadata_test.csv", # Feature mappings
         "saved_models/**/*.pt",
         "saved_models/**/*.json",      # e.g., nlp_label_quality.json

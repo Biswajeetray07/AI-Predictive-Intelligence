@@ -35,6 +35,9 @@ class Predictor:
             
         logging.info(f"Predictor initialized on {self.device}")
         
+        # Resolve S3 settings once for reuse
+        self._init_s3_config()
+        
         self.config = self._load_config()
         self.scalers = self._load_scalers()
         
@@ -46,11 +49,62 @@ class Predictor:
         
         self._load_all_models()
 
+    def _init_s3_config(self):
+        """Resolve USE_S3 and bucket name from env vars or Streamlit secrets."""
+        use_s3_env = os.getenv("USE_S3", "False").lower() in ("true", "1", "yes")
+        try:
+            import streamlit as st
+            use_s3_st = st.secrets.get("USE_S3", use_s3_env)
+            self._use_s3 = str(use_s3_st).lower() in ("true", "1", "yes")
+            self._s3_bucket = st.secrets.get("MODEL_BUCKET_NAME", os.getenv("MODEL_BUCKET_NAME", "my-model-mlopsproj012"))
+        except Exception:
+            self._use_s3 = use_s3_env
+            self._s3_bucket = os.getenv("MODEL_BUCKET_NAME", "my-model-mlopsproj012")
+        self._s3 = None
+
+    def _get_s3(self):
+        """Lazy-init S3 client."""
+        if self._s3 is None and self._use_s3:
+            try:
+                from src.cloud_storage.aws_storage import SimpleStorageService
+                self._s3 = SimpleStorageService()
+            except Exception as e:
+                logging.warning(f"Failed to init S3 client: {e}")
+        return self._s3
+
+    def _load_torch_state_from_s3(self, s3_key: str):
+        """Download a .pt state dict from S3 and load with torch."""
+        import io as _io
+        s3 = self._get_s3()
+        if s3 is None:
+            return None
+        try:
+            file_obj = s3.get_file_object(s3_key, self._s3_bucket)
+            if file_obj is None:
+                return None
+            raw_bytes = s3.read_object(file_obj, decode=False)
+            state = torch.load(_io.BytesIO(raw_bytes), map_location=self.device, weights_only=True)
+            logging.info(f"Loaded state dict from S3: {s3_key}")
+            return state
+        except Exception as e:
+            logging.warning(f"Failed to load {s3_key} from S3: {e}")
+            return None
+
     def _load_config(self):
         config_path = os.path.join(PROJECT_ROOT, 'configs', 'training_config.yaml')
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 return yaml.safe_load(f)
+        # S3 fallback
+        s3 = self._get_s3()
+        if s3:
+            try:
+                file_obj = s3.get_file_object('configs/training_config.yaml', self._s3_bucket)
+                if file_obj:
+                    content = s3.read_object(file_obj, decode=True)
+                    return yaml.safe_load(content)
+            except Exception as e:
+                logging.warning(f"Failed to load config from S3: {e}")
         return {}
 
     def _load_scalers(self):
@@ -160,9 +214,18 @@ class Predictor:
         
         for name in ts_model_names:
             path = os.path.join(model_dir, f'{name}_model.pt')
+            state = None
             if os.path.exists(path):
                 try:
                     state = torch.load(path, map_location=self.device, weights_only=True)
+                except Exception as e:
+                    logging.error(f"Failed to load {name} from disk: {e}")
+            else:
+                # S3 fallback
+                state = self._load_torch_state_from_s3(f'saved_models/{name}_model.pt')
+
+            if state is not None:
+                try:
                     # Infer actual architecture from saved weights
                     inp, hid, lyr = self._infer_dims_from_checkpoint(state, name)
                     input_dim = inp or default_input
@@ -186,7 +249,7 @@ class Predictor:
                     else:
                         logging.warning(f"Model type '{name}' not recognized. Skipping.")
                 except Exception as e:
-                    logging.error(f"Failed to load {name} model: {e}")
+                    logging.error(f"Failed to instantiate {name} model: {e}")
 
         # Store ts_dim from loaded models for later use
         self.ts_dim = 64  # will be updated from actual loaded model
@@ -200,10 +263,19 @@ class Predictor:
 
         # 2. Load NLP Model
         nlp_path = os.path.join(model_dir, 'nlp_multitask_model.pt')
+        nlp_state = None
         if os.path.exists(nlp_path):
             try:
+                nlp_state = torch.load(nlp_path, map_location=self.device, weights_only=True)
+            except Exception as e:
+                logging.warning(f"Failed to load NLP model from disk: {e}")
+        else:
+            nlp_state = self._load_torch_state_from_s3('saved_models/nlp_multitask_model.pt')
+
+        if nlp_state is not None:
+            try:
                 self.nlp_model = MultiTaskNLPModel(freeze_encoder_layers=0)
-                self.nlp_model.load_state_dict(torch.load(nlp_path, map_location=self.device, weights_only=True))
+                self.nlp_model.load_state_dict(nlp_state)
                 self.nlp_model.to(self.device).eval()
                 self.nlp_tokenizer = NLPTokenizer(max_length=self.config.get('nlp_model', {}).get('max_length', 256))
                 logging.info("Loaded NLP multi-task model")
@@ -214,9 +286,17 @@ class Predictor:
         # 3. Load Fusion Model — infer ts_dim from checkpoint
         fusion_path = os.path.join(model_dir, 'fusion_model.pt')
         fusion_config = self.config.get('fusion_model', {})
+        fusion_state = None
         if os.path.exists(fusion_path):
             try:
                 fusion_state = torch.load(fusion_path, map_location=self.device, weights_only=True)
+            except Exception as e:
+                logging.error(f"Failed to load fusion model from disk: {e}")
+        else:
+            fusion_state = self._load_torch_state_from_s3('saved_models/fusion_model.pt')
+
+        if fusion_state is not None:
+            try:
                 # Infer ts_dim from the gmu.ts_proj.weight shape
                 ts_dim_actual = self.ts_dim
                 if 'gmu.ts_proj.weight' in fusion_state:
